@@ -1,4 +1,5 @@
 use crate::config::{AppConfig, LogLevel};
+use crate::conflict;
 use crate::core::SystemReport;
 use crate::engine;
 use crate::monitor;
@@ -14,7 +15,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
     let effective_log_level = if verbose {
         LogLevel::Debug
     } else {
-        config.daemon.log_level.clone()
+        config.daemon.log_level
     };
 
     log_message(
@@ -22,6 +23,16 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
         LogLevel::Info,
         "Starting superfreq daemon...",
     );
+
+    // Check for conflicts with other power management services
+    let conflicts = conflict::detect_conflicts();
+    if conflicts.has_conflicts() {
+        log_message(
+            &effective_log_level,
+            LogLevel::Warning,
+            &conflicts.get_conflict_message(),
+        );
+    }
 
     // Create a flag that will be set to true when a signal is received
     let running = Arc::new(AtomicBool::new(true));
@@ -48,7 +59,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
         log_message(
             &effective_log_level,
             LogLevel::Info,
-            &format!("Stats will be written to: {}", stats_path),
+            &format!("Stats will be written to: {stats_path}"),
         );
     }
 
@@ -78,7 +89,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
                         log_message(
                             &effective_log_level,
                             LogLevel::Error,
-                            &format!("Failed to write stats file: {}", e),
+                            &format!("Failed to write stats file: {e}"),
                         );
                     }
                 }
@@ -99,7 +110,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
                             log_message(
                                 &effective_log_level,
                                 LogLevel::Info,
-                                &format!("System state changed to: {:?}", current_state),
+                                &format!("System state changed to: {current_state:?}"),
                             );
                         }
                     }
@@ -107,7 +118,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
                         log_message(
                             &effective_log_level,
                             LogLevel::Error,
-                            &format!("Error applying system settings: {}", e),
+                            &format!("Error applying system settings: {e}"),
                         );
                     }
                 }
@@ -125,8 +136,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
                             &effective_log_level,
                             LogLevel::Debug,
                             &format!(
-                                "Adaptive polling: increasing interval to {}s",
-                                current_poll_interval
+                                "Adaptive polling: increasing interval to {current_poll_interval}s"
                             ),
                         );
                     } else if time_since_change < 10 {
@@ -138,8 +148,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
                             &effective_log_level,
                             LogLevel::Debug,
                             &format!(
-                                "Adaptive polling: decreasing interval to {}s",
-                                current_poll_interval
+                                "Adaptive polling: decreasing interval to {current_poll_interval}s"
                             ),
                         );
                     }
@@ -151,7 +160,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
                 // If on battery and throttling is enabled, lengthen the poll interval to save power
                 if config.daemon.throttle_on_battery
                     && !report.batteries.is_empty()
-                    && report.batteries.first().map_or(false, |b| !b.ac_connected)
+                    && report.batteries.first().is_some_and(|b| !b.ac_connected)
                 {
                     let battery_multiplier = 2; // Poll half as often on battery
                     current_poll_interval = (current_poll_interval * battery_multiplier)
@@ -168,7 +177,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
                 log_message(
                     &effective_log_level,
                     LogLevel::Error,
-                    &format!("Error collecting system report: {}", e),
+                    &format!("Error collecting system report: {e}"),
                 );
             }
         }
@@ -206,10 +215,10 @@ fn log_message(effective_level: &LogLevel, msg_level: LogLevel, message: &str) {
 
     if should_log {
         match msg_level {
-            LogLevel::Error => eprintln!("ERROR: {}", message),
-            LogLevel::Warning => eprintln!("WARNING: {}", message),
-            LogLevel::Info => println!("INFO: {}", message),
-            LogLevel::Debug => println!("DEBUG: {}", message),
+            LogLevel::Error => eprintln!("ERROR: {message}"),
+            LogLevel::Warning => eprintln!("WARNING: {message}"),
+            LogLevel::Info => println!("INFO: {message}"),
+            LogLevel::Debug => println!("DEBUG: {message}"),
         }
     }
 }
@@ -225,7 +234,7 @@ fn write_stats_file(path: &str, report: &SystemReport) -> Result<(), std::io::Er
     writeln!(file, "turbo={:?}", report.cpu_global.turbo_status)?;
 
     if let Some(temp) = report.cpu_global.average_temperature_celsius {
-        writeln!(file, "cpu_temp={:.1}", temp)?;
+        writeln!(file, "cpu_temp={temp:.1}")?;
     }
 
     // Battery info
@@ -233,7 +242,7 @@ fn write_stats_file(path: &str, report: &SystemReport) -> Result<(), std::io::Er
         let battery = &report.batteries[0];
         writeln!(file, "ac_power={}", battery.ac_connected)?;
         if let Some(cap) = battery.capacity_percent {
-            writeln!(file, "battery_percent={}", cap)?;
+            writeln!(file, "battery_percent={cap}")?;
         }
     }
 
@@ -263,12 +272,13 @@ fn determine_system_state(report: &SystemReport) -> SystemState {
         if let Some(battery) = report.batteries.first() {
             if battery.ac_connected {
                 return SystemState::OnAC;
-            } else {
-                return SystemState::OnBattery;
             }
+            return SystemState::OnBattery;
         }
-    } else {
-        // No batteries means desktop, so always AC
+    }
+
+    // No batteries means desktop, so always AC
+    if report.batteries.is_empty() {
         return SystemState::OnAC;
     }
 
@@ -283,7 +293,8 @@ fn determine_system_state(report: &SystemReport) -> SystemState {
     let avg_load = report.system_load.load_avg_1min;
     if avg_load > 3.0 {
         return SystemState::HighLoad;
-    } else if avg_load < 0.5 {
+    }
+    if avg_load < 0.5 {
         return SystemState::LowLoad;
     }
 

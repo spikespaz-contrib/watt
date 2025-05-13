@@ -1,4 +1,4 @@
-use crate::core::TurboSetting;
+use crate::core::{GovernorOverrideMode, TurboSetting};
 use core::str;
 use std::{fs, io, path::Path, string::ToString};
 
@@ -275,4 +275,79 @@ pub fn get_platform_profiles() -> Result<Vec<String>> {
         .split_whitespace()
         .map(ToString::to_string)
         .collect())
+}
+
+/// Path for storing the governor override state
+const GOVERNOR_OVERRIDE_PATH: &str = "/etc/superfreq/governor_override";
+
+/// Force a specific CPU governor or reset to automatic mode
+pub fn force_governor(mode: GovernorOverrideMode) -> Result<()> {
+    // Create directory if it doesn't exist
+    let dir_path = Path::new("/etc/superfreq");
+    if !dir_path.exists() {
+        fs::create_dir_all(dir_path).map_err(|e| {
+            if e.kind() == io::ErrorKind::PermissionDenied {
+                ControlError::PermissionDenied(format!(
+                    "Permission denied creating directory: {}. Try running with sudo.",
+                    dir_path.display()
+                ))
+            } else {
+                ControlError::Io(e)
+            }
+        })?;
+    }
+
+    match mode {
+        GovernorOverrideMode::Reset => {
+            // Remove the override file if it exists
+            if Path::new(GOVERNOR_OVERRIDE_PATH).exists() {
+                fs::remove_file(GOVERNOR_OVERRIDE_PATH).map_err(|e| {
+                    if e.kind() == io::ErrorKind::PermissionDenied {
+                        ControlError::PermissionDenied(format!(
+                            "Permission denied removing override file: {GOVERNOR_OVERRIDE_PATH}. Try running with sudo."
+                        ))
+                    } else {
+                        ControlError::Io(e)
+                    }
+                })?;
+                println!(
+                    "Governor override has been reset. Normal profile-based settings will be used."
+                );
+            } else {
+                println!("No governor override was set.");
+            }
+            Ok(())
+        }
+        GovernorOverrideMode::Performance | GovernorOverrideMode::Powersave => {
+            // Create the override file with the selected governor
+            let governor = mode.to_string().to_lowercase();
+            fs::write(GOVERNOR_OVERRIDE_PATH, &governor).map_err(|e| {
+                if e.kind() == io::ErrorKind::PermissionDenied {
+                    ControlError::PermissionDenied(format!(
+                        "Permission denied writing to override file: {GOVERNOR_OVERRIDE_PATH}. Try running with sudo."
+                    ))
+                } else {
+                    ControlError::Io(e)
+                }
+            })?;
+
+            // Also apply the governor immediately
+            set_governor(&governor, None)?;
+
+            println!(
+                "Governor override set to '{governor}'. This setting will persist across reboots."
+            );
+            println!("To reset, use: superfreq force-governor reset");
+            Ok(())
+        }
+    }
+}
+
+/// Get the current governor override if set
+pub fn get_governor_override() -> Option<String> {
+    if Path::new(GOVERNOR_OVERRIDE_PATH).exists() {
+        fs::read_to_string(GOVERNOR_OVERRIDE_PATH).ok()
+    } else {
+        None
+    }
 }

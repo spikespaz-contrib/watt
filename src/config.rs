@@ -18,7 +18,7 @@ pub struct ProfileConfig {
 
 impl Default for ProfileConfig {
     fn default() -> Self {
-        ProfileConfig {
+        Self {
             governor: Some("schedutil".to_string()), // common sensible default (?)
             turbo: Some(TurboSetting::Auto),
             epp: None,              // defaults depend on governor and system
@@ -45,7 +45,7 @@ pub struct AppConfig {
     pub daemon: DaemonConfig,
 }
 
-fn default_poll_interval_sec() -> u64 {
+const fn default_poll_interval_sec() -> u64 {
     5
 }
 
@@ -59,24 +59,24 @@ pub enum ConfigError {
 }
 
 impl From<std::io::Error> for ConfigError {
-    fn from(err: std::io::Error) -> ConfigError {
-        ConfigError::Io(err)
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
     }
 }
 
 impl From<toml::de::Error> for ConfigError {
-    fn from(err: toml::de::Error) -> ConfigError {
-        ConfigError::Toml(err)
+    fn from(err: toml::de::Error) -> Self {
+        Self::Toml(err)
     }
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::Io(e) => write!(f, "I/O error: {}", e),
-            ConfigError::Toml(e) => write!(f, "TOML parsing error: {}", e),
-            ConfigError::NoValidConfigFound => write!(f, "No valid configuration file found."),
-            ConfigError::HomeDirNotFound => write!(f, "Could not determine user home directory."),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Toml(e) => write!(f, "TOML parsing error: {e}"),
+            Self::NoValidConfigFound => write!(f, "No valid configuration file found."),
+            Self::HomeDirNotFound => write!(f, "Could not determine user home directory."),
         }
     }
 }
@@ -128,8 +128,8 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
                                         .daemon
                                         .max_poll_interval_sec,
                                     throttle_on_battery: toml_app_config.daemon.throttle_on_battery,
-                                    log_level: toml_app_config.daemon.log_level.clone(),
-                                    stats_file_path: toml_app_config.daemon.stats_file_path.clone(),
+                                    log_level: toml_app_config.daemon.log_level,
+                                    stats_file_path: toml_app_config.daemon.stats_file_path,
                                 },
                             };
                             return Ok(app_config);
@@ -187,7 +187,7 @@ pub struct AppConfigToml {
 
 impl Default for ProfileConfigToml {
     fn default() -> Self {
-        ProfileConfigToml {
+        Self {
             governor: Some("schedutil".to_string()),
             turbo: Some("auto".to_string()),
             epp: None,
@@ -214,19 +214,19 @@ pub const DEFAULT_LOAD_THRESHOLD_HIGH: f32 = 70.0; // enable turbo if load is ab
 pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // disable turbo if load is below this
 pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // disable turbo if temperature is above this
 
-fn default_load_threshold_high() -> f32 {
+const fn default_load_threshold_high() -> f32 {
     DEFAULT_LOAD_THRESHOLD_HIGH
 }
-fn default_load_threshold_low() -> f32 {
+const fn default_load_threshold_low() -> f32 {
     DEFAULT_LOAD_THRESHOLD_LOW
 }
-fn default_temp_threshold_high() -> f32 {
+const fn default_temp_threshold_high() -> f32 {
     DEFAULT_TEMP_THRESHOLD_HIGH
 }
 
 impl Default for TurboAutoSettings {
     fn default() -> Self {
-        TurboAutoSettings {
+        Self {
             load_threshold_high: DEFAULT_LOAD_THRESHOLD_HIGH,
             load_threshold_low: DEFAULT_LOAD_THRESHOLD_LOW,
             temp_threshold_high: DEFAULT_TEMP_THRESHOLD_HIGH,
@@ -236,7 +236,7 @@ impl Default for TurboAutoSettings {
 
 impl From<ProfileConfigToml> for ProfileConfig {
     fn from(toml_config: ProfileConfigToml) -> Self {
-        ProfileConfig {
+        Self {
             governor: toml_config.governor,
             turbo: toml_config
                 .turbo
@@ -274,7 +274,7 @@ pub struct DaemonConfig {
     pub stats_file_path: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Error,
     Warning,
@@ -296,27 +296,27 @@ impl Default for DaemonConfig {
     }
 }
 
-fn default_adaptive_interval() -> bool {
+const fn default_adaptive_interval() -> bool {
     false
 }
 
-fn default_min_poll_interval_sec() -> u64 {
+const fn default_min_poll_interval_sec() -> u64 {
     1
 }
 
-fn default_max_poll_interval_sec() -> u64 {
+const fn default_max_poll_interval_sec() -> u64 {
     30
 }
 
-fn default_throttle_on_battery() -> bool {
+const fn default_throttle_on_battery() -> bool {
     true
 }
 
-fn default_log_level() -> LogLevel {
+const fn default_log_level() -> LogLevel {
     LogLevel::Info
 }
 
-fn default_stats_file_path() -> Option<String> {
+const fn default_stats_file_path() -> Option<String> {
     None
 }
 

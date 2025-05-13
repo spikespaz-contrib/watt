@@ -1,4 +1,5 @@
 mod config;
+mod conflict;
 mod core;
 mod cpu;
 mod daemon;
@@ -6,7 +7,7 @@ mod engine;
 mod monitor;
 
 use crate::config::AppConfig;
-use crate::core::TurboSetting;
+use crate::core::{GovernorOverrideMode, TurboSetting};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -30,6 +31,12 @@ enum Commands {
         governor: String,
         #[clap(long)]
         core_id: Option<u32>,
+    },
+    /// Force a specific governor mode persistently
+    ForceGovernor {
+        /// Mode to force: performance, powersave, or reset
+        #[clap(value_enum)]
+        mode: GovernorOverrideMode,
     },
     /// Set turbo boost behavior
     SetTurbo {
@@ -72,7 +79,7 @@ fn main() {
     let config = match config::load_config() {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("Error loading configuration: {}. Using default values.", e);
+            eprintln!("Error loading configuration: {e}. Using default values.");
             // Proceed with default config if loading fails, as per previous steps
             AppConfig::default()
         }
@@ -104,7 +111,7 @@ fn main() {
                     "Average CPU Temperature: {}",
                     report.cpu_global.average_temperature_celsius.map_or_else(
                         || "N/A (CPU temperature sensor not detected)".to_string(),
-                        |t| format!("{:.1}°C", t)
+                        |t| format!("{t:.1}°C")
                     )
                 );
 
@@ -124,10 +131,10 @@ fn main() {
                             .map_or_else(|| "N/A".to_string(), |f| f.to_string()),
                         core_info
                             .usage_percent
-                            .map_or_else(|| "N/A".to_string(), |f| format!("{:.1}", f)),
+                            .map_or_else(|| "N/A".to_string(), |f| format!("{f:.1}")),
                         core_info
                             .temperature_celsius
-                            .map_or_else(|| "N/A".to_string(), |f| format!("{:.1}", f))
+                            .map_or_else(|| "N/A".to_string(), |f| format!("{f:.1}"))
                     );
                 }
 
@@ -146,7 +153,7 @@ fn main() {
                                 .map_or_else(|| "N/A".to_string(), |c| c.to_string()),
                             battery_info
                                 .power_rate_watts
-                                .map_or_else(|| "N/A".to_string(), |p| format!("{:.2}", p)),
+                                .map_or_else(|| "N/A".to_string(), |p| format!("{p:.2}")),
                             battery_info
                                 .charge_start_threshold
                                 .map_or_else(|| "N/A".to_string(), |t| t.to_string()),
@@ -170,6 +177,9 @@ fn main() {
         },
         Some(Commands::SetGovernor { governor, core_id }) => cpu::set_governor(&governor, core_id)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
+        Some(Commands::ForceGovernor { mode }) => {
+            cpu::force_governor(mode).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        }
         Some(Commands::SetTurbo { setting }) => {
             cpu::set_turbo(setting).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
         }
@@ -192,15 +202,15 @@ fn main() {
         Some(Commands::Daemon { verbose }) => daemon::run_daemon(config, verbose),
         None => {
             println!("Welcome to superfreq! Use --help for commands.");
-            println!("Current effective configuration: {:?}", config);
+            println!("Current effective configuration: {config:?}");
             Ok(())
         }
     };
 
     if let Err(e) = command_result {
-        eprintln!("Error executing command: {}", e);
+        eprintln!("Error executing command: {e}");
         if let Some(source) = e.source() {
-            eprintln!("Caused by: {}", source);
+            eprintln!("Caused by: {source}");
         }
         // TODO: Consider specific error handling for PermissionDenied from cpu here
         // For example, check if e.downcast_ref::<cpu::ControlError>() matches PermissionDenied

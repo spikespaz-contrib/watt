@@ -10,15 +10,15 @@ pub enum EngineError {
 
 impl From<ControlError> for EngineError {
     fn from(err: ControlError) -> Self {
-        EngineError::ControlError(err)
+        Self::ControlError(err)
     }
 }
 
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineError::ControlError(e) => write!(f, "CPU control error: {}", e),
-            EngineError::ConfigurationError(s) => write!(f, "Configuration error: {}", s),
+            Self::ControlError(e) => write!(f, "CPU control error: {e}"),
+            Self::ConfigurationError(s) => write!(f, "Configuration error: {s}"),
         }
     }
 }
@@ -26,8 +26,8 @@ impl std::fmt::Display for EngineError {
 impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            EngineError::ControlError(e) => Some(e),
-            EngineError::ConfigurationError(_) => None,
+            Self::ControlError(e) => Some(e),
+            Self::ConfigurationError(_) => None,
         }
     }
 }
@@ -39,6 +39,15 @@ pub fn determine_and_apply_settings(
     config: &AppConfig,
     force_mode: Option<OperationalMode>,
 ) -> Result<(), EngineError> {
+    // First, check if there's a governor override set
+    if let Some(override_governor) = cpu::get_governor_override() {
+        println!(
+            "Engine: Governor override is active: '{}'. Setting governor.",
+            override_governor.trim()
+        );
+        cpu::set_governor(override_governor.trim(), None)?;
+    }
+
     let selected_profile_config: &ProfileConfig;
 
     if let Some(mode) = force_mode {
@@ -58,7 +67,7 @@ pub fn determine_and_apply_settings(
         // Otherwise, check the ac_connected status from the (first) battery.
         // XXX: This relies on the setting ac_connected in BatteryInfo being set correctly.
         let on_ac_power = report.batteries.is_empty()
-            || report.batteries.first().map_or(false, |b| b.ac_connected);
+            || report.batteries.first().is_some_and(|b| b.ac_connected);
 
         if on_ac_power {
             println!("Engine: On AC power, selecting Charger profile.");
@@ -74,12 +83,12 @@ pub fn determine_and_apply_settings(
     // and we'd like to replace them with proper logging in the future.
 
     if let Some(governor) = &selected_profile_config.governor {
-        println!("Engine: Setting governor to '{}'", governor);
+        println!("Engine: Setting governor to '{governor}'");
         cpu::set_governor(governor, None)?;
     }
 
     if let Some(turbo_setting) = selected_profile_config.turbo {
-        println!("Engine: Setting turbo to '{:?}'", turbo_setting);
+        println!("Engine: Setting turbo to '{turbo_setting:?}'");
         match turbo_setting {
             TurboSetting::Auto => {
                 println!("Engine: Managing turbo in auto mode based on system conditions");
@@ -90,27 +99,27 @@ pub fn determine_and_apply_settings(
     }
 
     if let Some(epp) = &selected_profile_config.epp {
-        println!("Engine: Setting EPP to '{}'", epp);
+        println!("Engine: Setting EPP to '{epp}'");
         cpu::set_epp(epp, None)?;
     }
 
     if let Some(epb) = &selected_profile_config.epb {
-        println!("Engine: Setting EPB to '{}'", epb);
+        println!("Engine: Setting EPB to '{epb}'");
         cpu::set_epb(epb, None)?;
     }
 
     if let Some(min_freq) = selected_profile_config.min_freq_mhz {
-        println!("Engine: Setting min frequency to '{} MHz'", min_freq);
+        println!("Engine: Setting min frequency to '{min_freq} MHz'");
         cpu::set_min_frequency(min_freq, None)?;
     }
 
     if let Some(max_freq) = selected_profile_config.max_freq_mhz {
-        println!("Engine: Setting max frequency to '{} MHz'", max_freq);
+        println!("Engine: Setting max frequency to '{max_freq} MHz'");
         cpu::set_max_frequency(max_freq, None)?;
     }
 
     if let Some(profile) = &selected_profile_config.platform_profile {
-        println!("Engine: Setting platform profile to '{}'", profile);
+        println!("Engine: Setting platform profile to '{profile}'");
         cpu::set_platform_profile(profile)?;
     }
 
@@ -127,7 +136,9 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     let cpu_temp = report.cpu_global.average_temperature_celsius;
 
     // Check if we have CPU usage data available
-    let avg_cpu_usage = if !report.cpu_cores.is_empty() {
+    let avg_cpu_usage = if report.cpu_cores.is_empty() {
+        None
+    } else {
         let sum: f32 = report
             .cpu_cores
             .iter()
@@ -144,8 +155,6 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         } else {
             None
         }
-    } else {
-        None
     };
 
     // Decision logic for enabling/disabling turbo
@@ -190,7 +199,7 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     };
 
     match cpu::set_turbo(turbo_setting) {
-        Ok(_) => {
+        Ok(()) => {
             println!(
                 "Engine: Auto Turbo: Successfully set turbo to {}",
                 if enable_turbo { "enabled" } else { "disabled" }
