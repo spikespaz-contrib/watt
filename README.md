@@ -233,3 +233,8 @@ Direnv is encouraged.
 
 Non-Nix users may get the appropriate Cargo andn Rust versions from their
 package manager.
+
+## License
+
+Superfreq is available under [Mozilla Public License v2.0](LICENSE) for your
+convenience, and at our expense. Please see the license file for more details.
