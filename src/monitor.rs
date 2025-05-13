@@ -1,12 +1,21 @@
-use crate::core::{SystemInfo, CpuCoreInfo, CpuGlobalInfo, BatteryInfo, SystemLoad, SystemReport};
 use crate::config::AppConfig;
-use std::{fs, io, path::{Path, PathBuf}, str::FromStr, time::SystemTime};
+use crate::core::{BatteryInfo, CpuCoreInfo, CpuGlobalInfo, SystemInfo, SystemLoad, SystemReport};
+use std::{
+    collections::HashMap,
+    fs, io,
+    path::{Path, PathBuf},
+    str::FromStr,
+    thread,
+    time::Duration,
+    time::SystemTime,
+};
 
 #[derive(Debug)]
 pub enum SysMonitorError {
     Io(io::Error),
     ReadError(String),
     ParseError(String),
+    ProcStatParseError(String),
     NotAvailable(String),
 }
 
@@ -22,6 +31,9 @@ impl std::fmt::Display for SysMonitorError {
             SysMonitorError::Io(e) => write!(f, "I/O error: {}", e),
             SysMonitorError::ReadError(s) => write!(f, "Failed to read sysfs path: {}", s),
             SysMonitorError::ParseError(s) => write!(f, "Failed to parse value: {}", s),
+            SysMonitorError::ProcStatParseError(s) => {
+                write!(f, "Failed to parse /proc/stat: {}", s)
+            }
             SysMonitorError::NotAvailable(s) => write!(f, "Information not available: {}", s),
         }
     }
@@ -77,17 +89,17 @@ pub fn get_system_info() -> Result<SystemInfo> {
                 }
             }
         }
-    } else if let Ok(lsb_release) = fs::read_to_string("/etc/lsb-release") { // fallback for some systems
+    } else if let Ok(lsb_release) = fs::read_to_string("/etc/lsb-release") {
+        // fallback for some systems
         for line in lsb_release.lines() {
             if line.starts_with("DISTRIB_DESCRIPTION=") {
-                 if let Some(val) = line.split('=').nth(1) {
+                if let Some(val) = line.split('=').nth(1) {
                     linux_distribution = val.trim_matches('"').to_string();
                     break;
                 }
             }
         }
     }
-
 
     Ok(SystemInfo {
         cpu_model,
@@ -104,18 +116,21 @@ fn get_logical_core_count() -> Result<u32> {
             let entry = entry?;
             let name = entry.file_name();
             if let Some(name_str) = name.to_str() {
-                if name_str.starts_with("cpu") &&
-                   name_str.len() > 3 &&
-                   name_str[3..].chars().all(char::is_numeric) {
+                if name_str.starts_with("cpu")
+                    && name_str.len() > 3
+                    && name_str[3..].chars().all(char::is_numeric)
+                {
                     // Check if it's a directory representing a core that can have cpufreq
                     if entry.path().join("cpufreq").exists() {
                         count += 1;
-                    } else if Path::new(&format!("/sys/devices/system/cpu/{}/online", name_str)).exists() {
+                    } else if Path::new(&format!("/sys/devices/system/cpu/{}/online", name_str))
+                        .exists()
+                    {
                         // Fallback for cores that might not have cpufreq but are online (e.g. E-cores on some setups before driver loads)
                         // This is a simplification; true cpufreq capability is key.
                         // If cpufreq dir doesn't exist, it might not be controllable by this tool.
                         // For counting purposes, we count it if it's an online CPU.
-                        count +=1;
+                        count += 1;
                     }
                 }
             }
@@ -129,8 +144,132 @@ fn get_logical_core_count() -> Result<u32> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CpuTimes {
+    user: u64,
+    nice: u64,
+    system: u64,
+    idle: u64,
+    iowait: u64,
+    irq: u64,
+    softirq: u64,
+    steal: u64,
+    guest: u64,
+    guest_nice: u64,
+}
 
-pub fn get_cpu_core_info(core_id: u32) -> Result<CpuCoreInfo> {
+impl CpuTimes {
+    fn total_time(&self) -> u64 {
+        self.user
+            + self.nice
+            + self.system
+            + self.idle
+            + self.iowait
+            + self.irq
+            + self.softirq
+            + self.steal
+    }
+
+    fn idle_time(&self) -> u64 {
+        self.idle + self.iowait
+    }
+}
+
+fn read_all_cpu_times() -> Result<HashMap<u32, CpuTimes>> {
+    let content = fs::read_to_string("/proc/stat").map_err(SysMonitorError::Io)?;
+    let mut cpu_times_map = HashMap::new();
+
+    for line in content.lines() {
+        if line.starts_with("cpu") && line.chars().nth(3).map_or(false, |c| c.is_digit(10)) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 11 {
+                return Err(SysMonitorError::ProcStatParseError(format!(
+                    "Line too short: {}",
+                    line
+                )));
+            }
+
+            let core_id_str = &parts[0][3..];
+            let core_id = core_id_str.parse::<u32>().map_err(|_| {
+                SysMonitorError::ProcStatParseError(format!(
+                    "Failed to parse core_id: {}",
+                    core_id_str
+                ))
+            })?;
+
+            let times = CpuTimes {
+                user: parts[1].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse user time: {}",
+                        parts[1]
+                    ))
+                })?,
+                nice: parts[2].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse nice time: {}",
+                        parts[2]
+                    ))
+                })?,
+                system: parts[3].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse system time: {}",
+                        parts[3]
+                    ))
+                })?,
+                idle: parts[4].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse idle time: {}",
+                        parts[4]
+                    ))
+                })?,
+                iowait: parts[5].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse iowait time: {}",
+                        parts[5]
+                    ))
+                })?,
+                irq: parts[6].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse irq time: {}",
+                        parts[6]
+                    ))
+                })?,
+                softirq: parts[7].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse softirq time: {}",
+                        parts[7]
+                    ))
+                })?,
+                steal: parts[8].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse steal time: {}",
+                        parts[8]
+                    ))
+                })?,
+                guest: parts[9].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse guest time: {}",
+                        parts[9]
+                    ))
+                })?,
+                guest_nice: parts[10].parse().map_err(|_| {
+                    SysMonitorError::ProcStatParseError(format!(
+                        "Failed to parse guest_nice time: {}",
+                        parts[10]
+                    ))
+                })?,
+            };
+            cpu_times_map.insert(core_id, times);
+        }
+    }
+    Ok(cpu_times_map)
+}
+
+pub fn get_cpu_core_info(
+    core_id: u32,
+    prev_times: &CpuTimes,
+    current_times: &CpuTimes,
+) -> Result<CpuCoreInfo> {
     let cpufreq_path = PathBuf::from(format!("/sys/devices/system/cpu/cpu{}/cpufreq/", core_id));
 
     let current_frequency_mhz = read_sysfs_value::<u32>(cpufreq_path.join("scaling_cur_freq"))
@@ -155,15 +294,20 @@ pub fn get_cpu_core_info(core_id: u32) -> Result<CpuCoreInfo> {
             // This is highly system-dependent, and not all systems will have this. For now,
             // we'll try a common pattern for "coretemp" driver because it works:tm: on my system.
             if let Ok(name) = read_sysfs_file_trimmed(hw_path.join("name")) {
-                if name == "coretemp" { // Common driver for Intel core temperatures
-                    for i in 1..=16 { // Check a reasonable number of temp inputs
+                if name == "coretemp" {
+                    // Common driver for Intel core temperatures
+                    for i in 1..=16 {
+                        // Check a reasonable number of temp inputs
                         let label_path = hw_path.join(format!("temp{}_label", i));
                         let input_path = hw_path.join(format!("temp{}_input", i));
                         if label_path.exists() && input_path.exists() {
                             if let Ok(label) = read_sysfs_file_trimmed(&label_path) {
                                 // Example: "Core 0", "Core 1", etc. or "Physical id 0" for package
-                                if label.eq_ignore_ascii_case(&format!("Core {}", core_id)) ||
-                                   label.eq_ignore_ascii_case(&format!("Package id {}", core_id)) { //core_id might map to package for some sensors
+                                if label.eq_ignore_ascii_case(&format!("Core {}", core_id))
+                                    || label
+                                        .eq_ignore_ascii_case(&format!("Package id {}", core_id))
+                                {
+                                    //core_id might map to package for some sensors
                                     if let Ok(temp_mc) = read_sysfs_value::<i32>(&input_path) {
                                         temperature_celsius = Some(temp_mc as f32 / 1000.0);
                                         break; // found temp for this core
@@ -174,15 +318,30 @@ pub fn get_cpu_core_info(core_id: u32) -> Result<CpuCoreInfo> {
                     }
                 }
             }
-            if temperature_celsius.is_some() { break; }
+            if temperature_celsius.is_some() {
+                break;
+            }
         }
     }
 
-    // FIXME: This is a placeholder so that I can actually run the code. It is a little
-    //complex to calculate from raw sysfs/procfs data. It typically involves reading /proc/stat
-    // and calculating deltas over time. This is out of scope for simple sysfs reads here.
-    // We will be returning here to this later.
-    let usage_percent: Option<f32> = None;
+    let usage_percent: Option<f32> = {
+        let prev_idle = prev_times.idle_time();
+        let current_idle = current_times.idle_time();
+
+        let prev_total = prev_times.total_time();
+        let current_total = current_times.total_time();
+
+        let total_diff = current_total.saturating_sub(prev_total);
+        let idle_diff = current_idle.saturating_sub(prev_idle);
+
+        // Avoid division by zero if no time has passed or counters haven't changed
+        if total_diff == 0 {
+            None
+        } else {
+            let usage = 100.0 * (1.0 - (idle_diff as f32 / total_diff as f32));
+            Some(usage.max(0.0).min(100.0)) // clamp between 0 and 100
+        }
+    };
 
     Ok(CpuCoreInfo {
         core_id,
@@ -195,8 +354,31 @@ pub fn get_cpu_core_info(core_id: u32) -> Result<CpuCoreInfo> {
 }
 
 pub fn get_all_cpu_core_info() -> Result<Vec<CpuCoreInfo>> {
-    let num_cores = get_logical_core_count()?;
-    (0..num_cores).map(get_cpu_core_info).collect()
+    let initial_cpu_times = read_all_cpu_times()?;
+    thread::sleep(Duration::from_millis(250)); // Interval for CPU usage calculation
+    let final_cpu_times = read_all_cpu_times()?;
+
+    let num_cores = get_logical_core_count()?; // Or derive from keys in cpu_times
+    let mut core_infos = Vec::with_capacity(num_cores as usize);
+
+    for core_id in 0..num_cores {
+        if let (Some(prev), Some(curr)) = (
+            initial_cpu_times.get(&core_id),
+            final_cpu_times.get(&core_id),
+        ) {
+            match get_cpu_core_info(core_id, prev, curr) {
+                Ok(info) => core_infos.push(info),
+                Err(e) => {
+                    // Log or handle error for a single core, maybe push a partial info or skip
+                    eprintln!("Error getting info for core {}: {}", core_id, e);
+                }
+            }
+        } else {
+            // Log or handle missing times for a core
+            eprintln!("Missing CPU time data for core {}", core_id);
+        }
+    }
+    Ok(core_infos)
 }
 
 pub fn get_cpu_global_info() -> Result<CpuGlobalInfo> {
@@ -206,20 +388,28 @@ pub fn get_cpu_global_info() -> Result<CpuGlobalInfo> {
 
     let current_governor = if cpufreq_base.join("scaling_governor").exists() {
         read_sysfs_file_trimmed(cpufreq_base.join("scaling_governor")).ok()
-    } else { None };
+    } else {
+        None
+    };
 
     let available_governors = if cpufreq_base.join("scaling_available_governors").exists() {
         read_sysfs_file_trimmed(cpufreq_base.join("scaling_available_governors"))
             .map(|s| s.split_whitespace().map(String::from).collect())
             .unwrap_or_else(|_| vec![])
-    } else { vec![] };
+    } else {
+        vec![]
+    };
 
     let turbo_status = if Path::new("/sys/devices/system/cpu/intel_pstate/no_turbo").exists() {
         // 0 means turbo enabled, 1 means disabled for intel_pstate
-        read_sysfs_value::<u8>("/sys/devices/system/cpu/intel_pstate/no_turbo").map(|val| val == 0).ok()
+        read_sysfs_value::<u8>("/sys/devices/system/cpu/intel_pstate/no_turbo")
+            .map(|val| val == 0)
+            .ok()
     } else if Path::new("/sys/devices/system/cpu/cpufreq/boost").exists() {
         // 1 means turbo enabled, 0 means disabled for generic cpufreq boost
-        read_sysfs_value::<u8>("/sys/devices/system/cpu/cpufreq/boost").map(|val| val == 1).ok()
+        read_sysfs_value::<u8>("/sys/devices/system/cpu/cpufreq/boost")
+            .map(|val| val == 1)
+            .ok()
     } else {
         None
     };
@@ -230,8 +420,8 @@ pub fn get_cpu_global_info() -> Result<CpuGlobalInfo> {
     let epb = read_sysfs_file_trimmed(cpufreq_base.join("energy_performance_bias")).ok();
 
     let platform_profile = read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile").ok();
-    let _platform_profile_choices = read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile_choices").ok();
-
+    let _platform_profile_choices =
+        read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile_choices").ok();
 
     Ok(CpuGlobalInfo {
         current_governor,
@@ -247,11 +437,15 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
     let mut batteries = Vec::new();
     let power_supply_path = Path::new("/sys/class/power_supply");
 
-    if !power_supply_path.exists() {
+    if (!power_supply_path.exists()) {
         return Ok(batteries); // no power supply directory
     }
 
-    let ignored_supplies = config.ignored_power_supplies.as_ref().cloned().unwrap_or_default();
+    let ignored_supplies = config
+        .ignored_power_supplies
+        .as_ref()
+        .cloned()
+        .unwrap_or_default();
 
     // Determine overall AC connection status
     let mut overall_ac_connected = false;
@@ -262,7 +456,14 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
 
         // Check for AC adapter type (common names: AC, ACAD, ADP)
         if let Ok(ps_type) = read_sysfs_file_trimmed(ps_path.join("type")) {
-            if ps_type == "Mains" || ps_type == "USB_PD_DRP" || ps_type == "USB_PD" || ps_type == "USB_DCP" || ps_type == "USB_CDP" || ps_type == "USB_ACA" { // USB types can also provide power
+            if ps_type == "Mains"
+                || ps_type == "USB_PD_DRP"
+                || ps_type == "USB_PD"
+                || ps_type == "USB_DCP"
+                || ps_type == "USB_CDP"
+                || ps_type == "USB_ACA"
+            {
+                // USB types can also provide power
                 if let Ok(online) = read_sysfs_value::<u8>(ps_path.join("online")) {
                     if online == 1 {
                         overall_ac_connected = true;
@@ -270,8 +471,9 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
                     }
                 }
             }
-        } else if name.starts_with("AC") || name.contains("ACAD") || name.contains("ADP") { // fallback for type file missing
-             if let Ok(online) = read_sysfs_value::<u8>(ps_path.join("online")) {
+        } else if name.starts_with("AC") || name.contains("ACAD") || name.contains("ADP") {
+            // fallback for type file missing
+            if let Ok(online) = read_sysfs_value::<u8>(ps_path.join("online")) {
                 if online == 1 {
                     overall_ac_connected = true;
                     break;
@@ -298,18 +500,26 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
                     read_sysfs_value::<i32>(ps_path.join("power_now")) // uW
                         .map(|uw| uw as f32 / 1_000_000.0)
                         .ok()
-                } else if ps_path.join("current_now").exists() && ps_path.join("voltage_now").exists() {
+                } else if ps_path.join("current_now").exists()
+                    && ps_path.join("voltage_now").exists()
+                {
                     let current_ua = read_sysfs_value::<i32>(ps_path.join("current_now")).ok(); // uA
                     let voltage_uv = read_sysfs_value::<i32>(ps_path.join("voltage_now")).ok(); // uV
                     if let (Some(c), Some(v)) = (current_ua, voltage_uv) {
                         // Power (W) = (Voltage (V) * Current (A))
                         // (v / 1e6 V) * (c / 1e6 A) = (v * c / 1e12) W
                         Some((c as f64 * v as f64 / 1_000_000_000_000.0) as f32)
-                    } else { None }
-                } else { None };
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
-                let charge_start_threshold = read_sysfs_value::<u8>(ps_path.join("charge_control_start_threshold")).ok();
-                let charge_stop_threshold = read_sysfs_value::<u8>(ps_path.join("charge_control_end_threshold")).ok();
+                let charge_start_threshold =
+                    read_sysfs_value::<u8>(ps_path.join("charge_control_start_threshold")).ok();
+                let charge_stop_threshold =
+                    read_sysfs_value::<u8>(ps_path.join("charge_control_end_threshold")).ok();
 
                 batteries.push(BatteryInfo {
                     name: name.clone(),
@@ -334,9 +544,15 @@ pub fn get_system_load() -> Result<SystemLoad> {
             "Could not parse /proc/loadavg: expected at least 3 parts".to_string(),
         ));
     }
-    let load_avg_1min = parts[0].parse().map_err(|_| SysMonitorError::ParseError(format!("Failed to parse 1min load: {}", parts[0])))?;
-    let load_avg_5min = parts[1].parse().map_err(|_| SysMonitorError::ParseError(format!("Failed to parse 5min load: {}", parts[1])))?;
-    let load_avg_15min = parts[2].parse().map_err(|_| SysMonitorError::ParseError(format!("Failed to parse 15min load: {}", parts[2])))?;
+    let load_avg_1min = parts[0].parse().map_err(|_| {
+        SysMonitorError::ParseError(format!("Failed to parse 1min load: {}", parts[0]))
+    })?;
+    let load_avg_5min = parts[1].parse().map_err(|_| {
+        SysMonitorError::ParseError(format!("Failed to parse 5min load: {}", parts[1]))
+    })?;
+    let load_avg_15min = parts[2].parse().map_err(|_| {
+        SysMonitorError::ParseError(format!("Failed to parse 15min load: {}", parts[2]))
+    })?;
 
     Ok(SystemLoad {
         load_avg_1min,
@@ -361,4 +577,3 @@ pub fn collect_system_report(config: &AppConfig) -> Result<SystemReport> {
         timestamp: SystemTime::now(),
     })
 }
-
