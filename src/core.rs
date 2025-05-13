@@ -20,9 +20,10 @@ pub struct CpuGlobalInfo {
     pub current_governor: Option<String>,
     pub available_governors: Vec<String>,
     pub turbo_status: Option<bool>, // true for enabled, false for disabled
-    pub epp: Option<String>, // Energy Performance Preference
-    pub epb: Option<String>, // Energy Performance Bias
+    pub epp: Option<String>,        // Energy Performance Preference
+    pub epb: Option<String>,        // Energy Performance Bias
     pub platform_profile: Option<String>,
+    pub average_temperature_celsius: Option<f32>, // Average temperature across all cores
 }
 
 pub struct BatteryInfo {
@@ -59,8 +60,8 @@ pub enum OperationalMode {
     Performance,
 }
 
-use serde::Deserialize;
 use clap::ValueEnum;
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum)]
 pub enum TurboSetting {
