@@ -1,4 +1,4 @@
-use crate::config::{AppConfig, ProfileConfig, TurboAutoSettings};
+use crate::config::{AppConfig, ProfileConfig};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self, ControlError};
 

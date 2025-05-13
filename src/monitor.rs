@@ -578,7 +578,7 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
     let mut batteries = Vec::new();
     let power_supply_path = Path::new("/sys/class/power_supply");
 
-    if (!power_supply_path.exists()) {
+    if !power_supply_path.exists() {
         return Ok(batteries); // no power supply directory
     }
 

@@ -1,13 +1,27 @@
-use crate::config::AppConfig;
+use crate::config::{AppConfig, LogLevel};
+use crate::core::SystemReport;
 use crate::engine;
 use crate::monitor;
+use std::fs::File;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// Run the daemon in foreground mode
-pub fn run_background(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting superfreq daemon in foreground mode...");
+/// Run the daemon
+pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Set effective log level based on config and verbose flag
+    let effective_log_level = if verbose {
+        LogLevel::Debug
+    } else {
+        config.daemon.log_level.clone()
+    };
+
+    log_message(
+        &effective_log_level,
+        LogLevel::Info,
+        "Starting superfreq daemon...",
+    );
 
     // Create a flag that will be set to true when a signal is received
     let running = Arc::new(AtomicBool::new(true));
@@ -20,10 +34,28 @@ pub fn run_background(config: AppConfig) -> Result<(), Box<dyn std::error::Error
     })
     .expect("Error setting Ctrl-C handler");
 
-    println!(
-        "Daemon initialized with poll interval: {}s",
-        config.poll_interval_sec
+    log_message(
+        &effective_log_level,
+        LogLevel::Info,
+        &format!(
+            "Daemon initialized with poll interval: {}s",
+            config.daemon.poll_interval_sec
+        ),
     );
+
+    // Set up stats file if configured
+    if let Some(stats_path) = &config.daemon.stats_file_path {
+        log_message(
+            &effective_log_level,
+            LogLevel::Info,
+            &format!("Stats will be written to: {}", stats_path),
+        );
+    }
+
+    // Variables for adaptive polling
+    let mut current_poll_interval = config.daemon.poll_interval_sec;
+    let mut last_settings_change = Instant::now();
+    let mut last_system_state = SystemState::Unknown;
 
     // Main loop
     while running.load(Ordering::SeqCst) {
@@ -31,31 +63,230 @@ pub fn run_background(config: AppConfig) -> Result<(), Box<dyn std::error::Error
 
         match monitor::collect_system_report(&config) {
             Ok(report) => {
-                println!("Collected system report, applying settings...");
+                log_message(
+                    &effective_log_level,
+                    LogLevel::Debug,
+                    "Collected system report, applying settings...",
+                );
+
+                // Determine current system state
+                let current_state = determine_system_state(&report);
+
+                // Update the stats file if configured
+                if let Some(stats_path) = &config.daemon.stats_file_path {
+                    if let Err(e) = write_stats_file(stats_path, &report) {
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Error,
+                            &format!("Failed to write stats file: {}", e),
+                        );
+                    }
+                }
+
                 match engine::determine_and_apply_settings(&report, &config, None) {
                     Ok(()) => {
-                        println!("Successfully applied system settings");
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Debug,
+                            "Successfully applied system settings",
+                        );
+
+                        // If system state changed or settings were applied differently, record the time
+                        if current_state != last_system_state {
+                            last_settings_change = Instant::now();
+                            last_system_state = current_state.clone();
+
+                            log_message(
+                                &effective_log_level,
+                                LogLevel::Info,
+                                &format!("System state changed to: {:?}", current_state),
+                            );
+                        }
                     }
                     Err(e) => {
-                        eprintln!("Error applying system settings: {}", e);
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Error,
+                            &format!("Error applying system settings: {}", e),
+                        );
                     }
+                }
+
+                // Adjust poll interval if adaptive polling is enabled
+                if config.daemon.adaptive_interval {
+                    let time_since_change = last_settings_change.elapsed().as_secs();
+
+                    // If we've been stable for a while, increase the interval (up to max)
+                    if time_since_change > 60 {
+                        current_poll_interval =
+                            (current_poll_interval * 2).min(config.daemon.max_poll_interval_sec);
+
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Debug,
+                            &format!(
+                                "Adaptive polling: increasing interval to {}s",
+                                current_poll_interval
+                            ),
+                        );
+                    } else if time_since_change < 10 {
+                        // If we've had recent changes, decrease the interval (down to min)
+                        current_poll_interval =
+                            (current_poll_interval / 2).max(config.daemon.min_poll_interval_sec);
+
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Debug,
+                            &format!(
+                                "Adaptive polling: decreasing interval to {}s",
+                                current_poll_interval
+                            ),
+                        );
+                    }
+                } else {
+                    // If not adaptive, use the configured poll interval
+                    current_poll_interval = config.daemon.poll_interval_sec;
+                }
+
+                // If on battery and throttling is enabled, lengthen the poll interval to save power
+                if config.daemon.throttle_on_battery
+                    && !report.batteries.is_empty()
+                    && report.batteries.first().map_or(false, |b| !b.ac_connected)
+                {
+                    let battery_multiplier = 2; // Poll half as often on battery
+                    current_poll_interval = (current_poll_interval * battery_multiplier)
+                        .min(config.daemon.max_poll_interval_sec);
+
+                    log_message(
+                        &effective_log_level,
+                        LogLevel::Debug,
+                        "On battery power, increasing poll interval to save energy",
+                    );
                 }
             }
             Err(e) => {
-                eprintln!("Error collecting system report: {}", e);
+                log_message(
+                    &effective_log_level,
+                    LogLevel::Error,
+                    &format!("Error collecting system report: {}", e),
+                );
             }
         }
 
         // Sleep for the remaining time in the poll interval
         let elapsed = start_time.elapsed();
-        let poll_duration = Duration::from_secs(config.poll_interval_sec);
+        let poll_duration = Duration::from_secs(current_poll_interval);
         if elapsed < poll_duration {
             let sleep_time = poll_duration - elapsed;
-            println!("Sleeping for {}s until next cycle", sleep_time.as_secs());
+            log_message(
+                &effective_log_level,
+                LogLevel::Debug,
+                &format!("Sleeping for {}s until next cycle", sleep_time.as_secs()),
+            );
             std::thread::sleep(sleep_time);
         }
     }
 
-    println!("Daemon stopped");
+    log_message(&effective_log_level, LogLevel::Info, "Daemon stopped");
     Ok(())
+}
+
+/// Log a message based on the current log level
+fn log_message(effective_level: &LogLevel, msg_level: LogLevel, message: &str) {
+    // Only log messages at or above the effective log level
+    let should_log = match effective_level {
+        LogLevel::Error => matches!(msg_level, LogLevel::Error),
+        LogLevel::Warning => matches!(msg_level, LogLevel::Error | LogLevel::Warning),
+        LogLevel::Info => matches!(
+            msg_level,
+            LogLevel::Error | LogLevel::Warning | LogLevel::Info
+        ),
+        LogLevel::Debug => true,
+    };
+
+    if should_log {
+        match msg_level {
+            LogLevel::Error => eprintln!("ERROR: {}", message),
+            LogLevel::Warning => eprintln!("WARNING: {}", message),
+            LogLevel::Info => println!("INFO: {}", message),
+            LogLevel::Debug => println!("DEBUG: {}", message),
+        }
+    }
+}
+
+/// Write current system stats to a file for --stats to read
+fn write_stats_file(path: &str, report: &SystemReport) -> Result<(), std::io::Error> {
+    let mut file = File::create(path)?;
+
+    writeln!(file, "timestamp={:?}", report.timestamp)?;
+
+    // CPU info
+    writeln!(file, "governor={:?}", report.cpu_global.current_governor)?;
+    writeln!(file, "turbo={:?}", report.cpu_global.turbo_status)?;
+
+    if let Some(temp) = report.cpu_global.average_temperature_celsius {
+        writeln!(file, "cpu_temp={:.1}", temp)?;
+    }
+
+    // Battery info
+    if !report.batteries.is_empty() {
+        let battery = &report.batteries[0];
+        writeln!(file, "ac_power={}", battery.ac_connected)?;
+        if let Some(cap) = battery.capacity_percent {
+            writeln!(file, "battery_percent={}", cap)?;
+        }
+    }
+
+    // System load
+    writeln!(file, "load_1m={:.2}", report.system_load.load_avg_1min)?;
+    writeln!(file, "load_5m={:.2}", report.system_load.load_avg_5min)?;
+    writeln!(file, "load_15m={:.2}", report.system_load.load_avg_15min)?;
+
+    Ok(())
+}
+
+/// Simplified system state used for determining when to adjust polling interval
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum SystemState {
+    Unknown,
+    OnAC,
+    OnBattery,
+    HighLoad,
+    LowLoad,
+    HighTemp,
+}
+
+/// Determine the current system state for adaptive polling
+fn determine_system_state(report: &SystemReport) -> SystemState {
+    // Check power state first
+    if !report.batteries.is_empty() {
+        if let Some(battery) = report.batteries.first() {
+            if battery.ac_connected {
+                return SystemState::OnAC;
+            } else {
+                return SystemState::OnBattery;
+            }
+        }
+    } else {
+        // No batteries means desktop, so always AC
+        return SystemState::OnAC;
+    }
+
+    // Check temperature
+    if let Some(temp) = report.cpu_global.average_temperature_celsius {
+        if temp > 80.0 {
+            return SystemState::HighTemp;
+        }
+    }
+
+    // Check load
+    let avg_load = report.system_load.load_avg_1min;
+    if avg_load > 3.0 {
+        return SystemState::HighLoad;
+    } else if avg_load < 0.5 {
+        return SystemState::LowLoad;
+    }
+
+    // Default case
+    SystemState::Unknown
 }

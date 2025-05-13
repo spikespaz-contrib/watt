@@ -1,7 +1,7 @@
-use crate::core::{OperationalMode, TurboSetting};
+use crate::core::TurboSetting;
 use serde::Deserialize;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // Structs for configuration using serde::Deserialize
 #[derive(Deserialize, Debug, Clone)]
@@ -41,6 +41,8 @@ pub struct AppConfig {
     pub ignored_power_supplies: Option<Vec<String>>,
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
+    #[serde(default)]
+    pub daemon: DaemonConfig,
 }
 
 fn default_poll_interval_sec() -> u64 {
@@ -116,6 +118,19 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
                                     .battery_charge_thresholds,
                                 ignored_power_supplies: toml_app_config.ignored_power_supplies,
                                 poll_interval_sec: toml_app_config.poll_interval_sec,
+                                daemon: DaemonConfig {
+                                    poll_interval_sec: toml_app_config.daemon.poll_interval_sec,
+                                    adaptive_interval: toml_app_config.daemon.adaptive_interval,
+                                    min_poll_interval_sec: toml_app_config
+                                        .daemon
+                                        .min_poll_interval_sec,
+                                    max_poll_interval_sec: toml_app_config
+                                        .daemon
+                                        .max_poll_interval_sec,
+                                    throttle_on_battery: toml_app_config.daemon.throttle_on_battery,
+                                    log_level: toml_app_config.daemon.log_level.clone(),
+                                    stats_file_path: toml_app_config.daemon.stats_file_path.clone(),
+                                },
                             };
                             return Ok(app_config);
                         }
@@ -140,6 +155,7 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
         battery_charge_thresholds: default_toml_config.battery_charge_thresholds,
         ignored_power_supplies: default_toml_config.ignored_power_supplies,
         poll_interval_sec: default_toml_config.poll_interval_sec,
+        daemon: DaemonConfig::default(),
     })
 }
 
@@ -165,6 +181,8 @@ pub struct AppConfigToml {
     pub ignored_power_supplies: Option<Vec<String>>,
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
+    #[serde(default)]
+    pub daemon: DaemonConfigToml,
 }
 
 impl Default for ProfileConfigToml {
@@ -192,9 +210,9 @@ pub struct TurboAutoSettings {
 }
 
 // Default thresholds for Auto turbo mode
-pub const DEFAULT_LOAD_THRESHOLD_HIGH: f32 = 70.0; // Enable turbo if load is above this
-pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // Disable turbo if load is below this
-pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // Disable turbo if temperature is above this
+pub const DEFAULT_LOAD_THRESHOLD_HIGH: f32 = 70.0; // enable turbo if load is above this
+pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // disable turbo if load is below this
+pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // disable turbo if temperature is above this
 
 fn default_load_threshold_high() -> f32 {
     DEFAULT_LOAD_THRESHOLD_HIGH
@@ -234,6 +252,102 @@ impl From<ProfileConfigToml> for ProfileConfig {
             max_freq_mhz: toml_config.max_freq_mhz,
             platform_profile: toml_config.platform_profile,
             turbo_auto_settings: Some(TurboAutoSettings::default()),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct DaemonConfig {
+    #[serde(default = "default_poll_interval_sec")]
+    pub poll_interval_sec: u64,
+    #[serde(default = "default_adaptive_interval")]
+    pub adaptive_interval: bool,
+    #[serde(default = "default_min_poll_interval_sec")]
+    pub min_poll_interval_sec: u64,
+    #[serde(default = "default_max_poll_interval_sec")]
+    pub max_poll_interval_sec: u64,
+    #[serde(default = "default_throttle_on_battery")]
+    pub throttle_on_battery: bool,
+    #[serde(default = "default_log_level")]
+    pub log_level: LogLevel,
+    #[serde(default = "default_stats_file_path")]
+    pub stats_file_path: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub enum LogLevel {
+    Error,
+    Warning,
+    Info,
+    Debug,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_sec: default_poll_interval_sec(),
+            adaptive_interval: default_adaptive_interval(),
+            min_poll_interval_sec: default_min_poll_interval_sec(),
+            max_poll_interval_sec: default_max_poll_interval_sec(),
+            throttle_on_battery: default_throttle_on_battery(),
+            log_level: default_log_level(),
+            stats_file_path: default_stats_file_path(),
+        }
+    }
+}
+
+fn default_adaptive_interval() -> bool {
+    false
+}
+
+fn default_min_poll_interval_sec() -> u64 {
+    1
+}
+
+fn default_max_poll_interval_sec() -> u64 {
+    30
+}
+
+fn default_throttle_on_battery() -> bool {
+    true
+}
+
+fn default_log_level() -> LogLevel {
+    LogLevel::Info
+}
+
+fn default_stats_file_path() -> Option<String> {
+    None
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct DaemonConfigToml {
+    #[serde(default = "default_poll_interval_sec")]
+    pub poll_interval_sec: u64,
+    #[serde(default = "default_adaptive_interval")]
+    pub adaptive_interval: bool,
+    #[serde(default = "default_min_poll_interval_sec")]
+    pub min_poll_interval_sec: u64,
+    #[serde(default = "default_max_poll_interval_sec")]
+    pub max_poll_interval_sec: u64,
+    #[serde(default = "default_throttle_on_battery")]
+    pub throttle_on_battery: bool,
+    #[serde(default = "default_log_level")]
+    pub log_level: LogLevel,
+    #[serde(default = "default_stats_file_path")]
+    pub stats_file_path: Option<String>,
+}
+
+impl Default for DaemonConfigToml {
+    fn default() -> Self {
+        Self {
+            poll_interval_sec: default_poll_interval_sec(),
+            adaptive_interval: default_adaptive_interval(),
+            min_poll_interval_sec: default_min_poll_interval_sec(),
+            max_poll_interval_sec: default_max_poll_interval_sec(),
+            throttle_on_battery: default_throttle_on_battery(),
+            log_level: default_log_level(),
+            stats_file_path: default_stats_file_path(),
         }
     }
 }
