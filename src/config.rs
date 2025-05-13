@@ -1,18 +1,19 @@
-use serde::Deserialize;
-use std::path::{Path, PathBuf};
-use std::fs;
 use crate::core::{OperationalMode, TurboSetting};
+use serde::Deserialize;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 // Structs for configuration using serde::Deserialize
 #[derive(Deserialize, Debug, Clone)]
 pub struct ProfileConfig {
     pub governor: Option<String>,
     pub turbo: Option<TurboSetting>,
-    pub epp: Option<String>,      // Energy Performance Preference (EPP)
-    pub epb: Option<String>,      // Energy Performance Bias (EPB) - usually an integer, but string for flexibility from sysfs
+    pub epp: Option<String>, // Energy Performance Preference (EPP)
+    pub epb: Option<String>, // Energy Performance Bias (EPB) - usually an integer, but string for flexibility from sysfs
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
+    pub turbo_auto_settings: Option<TurboAutoSettings>,
 }
 
 impl Default for ProfileConfig {
@@ -20,11 +21,12 @@ impl Default for ProfileConfig {
         ProfileConfig {
             governor: Some("schedutil".to_string()), // common sensible default (?)
             turbo: Some(TurboSetting::Auto),
-            epp: None, // defaults depend on governor and system
-            epb: None, // defaults depend on governor and system
-            min_freq_mhz: None, // no override
-            max_freq_mhz: None, // no override
+            epp: None,              // defaults depend on governor and system
+            epb: None,              // defaults depend on governor and system
+            min_freq_mhz: None,     // no override
+            max_freq_mhz: None,     // no override
             platform_profile: None, // no override
+            turbo_auto_settings: Some(TurboAutoSettings::default()),
         }
     }
 }
@@ -90,7 +92,9 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
         let user_config_path = home_dir.join(".config/auto_cpufreq_rs/config.toml");
         config_paths.push(user_config_path);
     } else {
-        eprintln!("Warning: Could not determine home directory. User-specific config will not be loaded.");
+        eprintln!(
+            "Warning: Could not determine home directory. User-specific config will not be loaded."
+        );
     }
 
     // System-wide path
@@ -108,7 +112,8 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
                             let app_config = AppConfig {
                                 charger: ProfileConfig::from(toml_app_config.charger),
                                 battery: ProfileConfig::from(toml_app_config.battery),
-                                battery_charge_thresholds: toml_app_config.battery_charge_thresholds,
+                                battery_charge_thresholds: toml_app_config
+                                    .battery_charge_thresholds,
                                 ignored_power_supplies: toml_app_config.ignored_power_supplies,
                                 poll_interval_sec: toml_app_config.poll_interval_sec,
                             };
@@ -176,22 +181,59 @@ impl Default for ProfileConfigToml {
     }
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct TurboAutoSettings {
+    #[serde(default = "default_load_threshold_high")]
+    pub load_threshold_high: f32,
+    #[serde(default = "default_load_threshold_low")]
+    pub load_threshold_low: f32,
+    #[serde(default = "default_temp_threshold_high")]
+    pub temp_threshold_high: f32,
+}
+
+// Default thresholds for Auto turbo mode
+pub const DEFAULT_LOAD_THRESHOLD_HIGH: f32 = 70.0; // Enable turbo if load is above this
+pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // Disable turbo if load is below this
+pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // Disable turbo if temperature is above this
+
+fn default_load_threshold_high() -> f32 {
+    DEFAULT_LOAD_THRESHOLD_HIGH
+}
+fn default_load_threshold_low() -> f32 {
+    DEFAULT_LOAD_THRESHOLD_LOW
+}
+fn default_temp_threshold_high() -> f32 {
+    DEFAULT_TEMP_THRESHOLD_HIGH
+}
+
+impl Default for TurboAutoSettings {
+    fn default() -> Self {
+        TurboAutoSettings {
+            load_threshold_high: DEFAULT_LOAD_THRESHOLD_HIGH,
+            load_threshold_low: DEFAULT_LOAD_THRESHOLD_LOW,
+            temp_threshold_high: DEFAULT_TEMP_THRESHOLD_HIGH,
+        }
+    }
+}
 
 impl From<ProfileConfigToml> for ProfileConfig {
     fn from(toml_config: ProfileConfigToml) -> Self {
         ProfileConfig {
             governor: toml_config.governor,
-            turbo: toml_config.turbo.and_then(|s| match s.to_lowercase().as_str() {
-                "always" => Some(TurboSetting::Always),
-                "auto" => Some(TurboSetting::Auto),
-                "never" => Some(TurboSetting::Never),
-                _ => None,
-            }),
+            turbo: toml_config
+                .turbo
+                .and_then(|s| match s.to_lowercase().as_str() {
+                    "always" => Some(TurboSetting::Always),
+                    "auto" => Some(TurboSetting::Auto),
+                    "never" => Some(TurboSetting::Never),
+                    _ => None,
+                }),
             epp: toml_config.epp,
             epb: toml_config.epb,
             min_freq_mhz: toml_config.min_freq_mhz,
             max_freq_mhz: toml_config.max_freq_mhz,
             platform_profile: toml_config.platform_profile,
+            turbo_auto_settings: Some(TurboAutoSettings::default()),
         }
     }
 }

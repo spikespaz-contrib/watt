@@ -1,5 +1,5 @@
-use crate::core::{SystemReport, OperationalMode, TurboSetting};
-use crate::config::{AppConfig, ProfileConfig};
+use crate::config::{AppConfig, ProfileConfig, TurboAutoSettings};
+use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self, ControlError};
 
 #[derive(Debug)]
@@ -57,8 +57,8 @@ pub fn determine_and_apply_settings(
         // If no batteries, assume AC power (desktop).
         // Otherwise, check the ac_connected status from the (first) battery.
         // XXX: This relies on the setting ac_connected in BatteryInfo being set correctly.
-        let on_ac_power = report.batteries.is_empty() ||
-                          report.batteries.first().map_or(false, |b| b.ac_connected);
+        let on_ac_power = report.batteries.is_empty()
+            || report.batteries.first().map_or(false, |b| b.ac_connected);
 
         if on_ac_power {
             println!("Engine: On AC power, selecting Charger profile.");
@@ -80,7 +80,13 @@ pub fn determine_and_apply_settings(
 
     if let Some(turbo_setting) = selected_profile_config.turbo {
         println!("Engine: Setting turbo to '{:?}'", turbo_setting);
-        cpu::set_turbo(turbo_setting)?;
+        match turbo_setting {
+            TurboSetting::Auto => {
+                println!("Engine: Managing turbo in auto mode based on system conditions");
+                manage_auto_turbo(report, selected_profile_config)?;
+            }
+            _ => cpu::set_turbo(turbo_setting)?,
+        }
     }
 
     if let Some(epp) = &selected_profile_config.epp {
@@ -89,7 +95,7 @@ pub fn determine_and_apply_settings(
     }
 
     if let Some(epb) = &selected_profile_config.epb {
-         println!("Engine: Setting EPB to '{}'", epb);
+        println!("Engine: Setting EPB to '{}'", epb);
         cpu::set_epb(epb, None)?;
     }
 
@@ -111,4 +117,86 @@ pub fn determine_and_apply_settings(
     println!("Engine: Profile settings applied successfully.");
 
     Ok(())
+}
+
+fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<(), EngineError> {
+    // Get the auto turbo settings from the config, or use defaults
+    let turbo_settings = config.turbo_auto_settings.clone().unwrap_or_default();
+
+    // Get average CPU temperature and CPU load
+    let cpu_temp = report.cpu_global.average_temperature_celsius;
+
+    // Check if we have CPU usage data available
+    let avg_cpu_usage = if !report.cpu_cores.is_empty() {
+        let sum: f32 = report
+            .cpu_cores
+            .iter()
+            .filter_map(|core| core.usage_percent)
+            .sum();
+        let count = report
+            .cpu_cores
+            .iter()
+            .filter(|core| core.usage_percent.is_some())
+            .count();
+
+        if count > 0 {
+            Some(sum / count as f32)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Decision logic for enabling/disabling turbo
+    let enable_turbo = match (cpu_temp, avg_cpu_usage) {
+        // If temperature is too high, disable turbo regardless of load
+        (Some(temp), _) if temp >= turbo_settings.temp_threshold_high => {
+            println!(
+                "Engine: Auto Turbo: Disabled due to high temperature ({:.1}°C >= {:.1}°C)",
+                temp, turbo_settings.temp_threshold_high
+            );
+            false
+        }
+        // If load is high enough, enable turbo (unless temp already caused it to disable)
+        (_, Some(usage)) if usage >= turbo_settings.load_threshold_high => {
+            println!(
+                "Engine: Auto Turbo: Enabled due to high CPU load ({:.1}% >= {:.1}%)",
+                usage, turbo_settings.load_threshold_high
+            );
+            true
+        }
+        // If load is low, disable turbo
+        (_, Some(usage)) if usage <= turbo_settings.load_threshold_low => {
+            println!(
+                "Engine: Auto Turbo: Disabled due to low CPU load ({:.1}% <= {:.1}%)",
+                usage, turbo_settings.load_threshold_low
+            );
+            false
+        }
+        // In intermediate load scenarios or if we can't determine, leave turbo in current state
+        // For now, we'll disable it as a safe default
+        _ => {
+            println!("Engine: Auto Turbo: Disabled (default for indeterminate state)");
+            false
+        }
+    };
+
+    // Apply the turbo setting
+    let turbo_setting = if enable_turbo {
+        TurboSetting::Always
+    } else {
+        TurboSetting::Never
+    };
+
+    match cpu::set_turbo(turbo_setting) {
+        Ok(_) => {
+            println!(
+                "Engine: Auto Turbo: Successfully set turbo to {}",
+                if enable_turbo { "enabled" } else { "disabled" }
+            );
+            Ok(())
+        }
+        Err(e) => Err(EngineError::ControlError(e)),
+    }
 }

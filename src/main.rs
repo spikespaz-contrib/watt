@@ -1,6 +1,7 @@
 mod config;
 mod core;
 mod cpu;
+mod daemon;
 mod engine;
 mod monitor;
 
@@ -19,6 +20,8 @@ struct Cli {
 enum Commands {
     /// Display current system information
     Info,
+    /// Run as a daemon in the background
+    Daemon,
     /// Set CPU governor
     SetGovernor {
         governor: String,
@@ -183,6 +186,7 @@ fn main() {
         }
         Some(Commands::SetPlatformProfile { profile }) => cpu::set_platform_profile(&profile)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
+        Some(Commands::Daemon) => daemon::run_background(config),
         None => {
             println!("Welcome to superfreq! Use --help for commands.");
             println!("Current effective configuration: {:?}", config);
