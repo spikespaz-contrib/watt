@@ -1,8 +1,10 @@
 use crate::core::TurboSetting;
 use crate::monitor::Result as MonitorResult;
+use core::str;
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    string::ToString,
 };
 
 #[derive(Debug)]
@@ -12,6 +14,7 @@ pub enum ControlError {
     InvalidValueError(String),
     NotSupported(String),
     PermissionDenied(String),
+    InvalidProfile(String),
 }
 
 impl From<io::Error> for ControlError {
@@ -32,6 +35,13 @@ impl std::fmt::Display for ControlError {
             ControlError::NotSupported(s) => write!(f, "Control action not supported: {}", s),
             ControlError::PermissionDenied(s) => {
                 write!(f, "Permission denied: {}. Try running with sudo.", s)
+            }
+            ControlError::InvalidProfile(s) => {
+                write!(
+                    f,
+                    "Invalid platform control profile {} supplied, please provide a valid one.",
+                    s
+                )
             }
         }
     }
@@ -217,17 +227,70 @@ pub fn set_max_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
     }
 }
 
+/// Sets the platform profile.
+/// This changes the system performance, temperature, fan, and other hardware replated characteristics.
+///
+/// Also see [`The Kernel docs`] for this.
+///
+/// [`The Kernel docs`]: <https://docs.kernel.org/userspace-api/sysfs-platform_profile.html>
+///
+/// # Examples
+///
+/// ```
+/// set_platform_profile("balanced");
+/// ```
+///
 pub fn set_platform_profile(profile: &str) -> Result<()> {
     let path = "/sys/firmware/acpi/platform_profile";
-    if Path::new(path).exists() {
-        // Before writing, it'd be nice to check if the profile is in available_profiles
-        // Reading available profiles: /sys/firmware/acpi/platform_profile_choices
-        // TODO: Validate profile against available profiles here for a cleaner impl.
-        write_sysfs_value(path, profile)
-    } else {
-        Err(ControlError::NotSupported(
-            "Platform profile control not found at /sys/firmware/acpi/platform_profile."
-                .to_string(),
-        ))
+    if !Path::new(path).exists() {
+        return Err(ControlError::NotSupported(format!(
+            "Platform profile control not found at {path}.",
+        )));
     }
+
+    let available_profiles = get_platform_profiles()?;
+
+    if !available_profiles.contains(&profile.to_string()) {
+        return Err(ControlError::InvalidProfile(format!(
+            "Invalid platform control profile provided.\n\
+             Provided profile: {} \n\
+             Available profiles:\n\
+             {}",
+            profile,
+            available_profiles.join(", ")
+        )));
+    }
+    write_sysfs_value(path, profile)
+}
+
+/// Returns the list of available platform profiles.
+///
+/// # Errors
+///
+/// Returns [`ControlError::NotSupported`] if:
+/// - The file `/sys/firmware/acpi/platform_profile_choices` does not exist.
+/// - The file `/sys/firmware/acpi/platform_profile_choices` is empty.
+///
+/// Returns [`ControlError::PermissionDenied`] if the file `/sys/firmware/acpi/platform_profile_choices` cannot be read.
+///
+pub fn get_platform_profiles() -> Result<Vec<String>> {
+    let path = "/sys/firmware/acpi/platform_profile_choices";
+
+    if !Path::new(path).exists() {
+        return Err(ControlError::NotSupported(format!(
+            "Platform profile choices not found at {path}."
+        )));
+    }
+
+    let buf = fs::read(path)
+        .map_err(|_| ControlError::PermissionDenied(format!("Cannot read contents of {path}.")))?;
+
+    let content = str::from_utf8(&buf).map_err(|_| {
+        ControlError::NotSupported(format!("No platform profile choices found at {path}."))
+    })?;
+
+    Ok(content
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect())
 }
