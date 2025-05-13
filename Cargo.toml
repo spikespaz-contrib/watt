@@ -11,3 +11,4 @@ clap = { version = "4.0", features = ["derive"] }
 num_cpus = "1.16"
 ctrlc = "3.4"
 notify = { version = "8.0.0", features = ["serde"] }
+chrono = "0.4"

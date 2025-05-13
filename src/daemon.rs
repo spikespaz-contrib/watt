@@ -69,10 +69,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
         Some(path)
     } else {
         // Check standard config paths
-        let default_paths = [
-            "/etc/superfreq/config.toml",
-            "/etc/superfreq.toml",
-        ];
+        let default_paths = ["/etc/superfreq/config.toml", "/etc/superfreq.toml"];
 
         default_paths
             .iter()
@@ -80,24 +77,26 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
             .map(|path| (*path).to_string())
     };
 
-    let mut config_watcher = if let Some(path) = config_file_path { match ConfigWatcher::new(&path) {
-        Ok(watcher) => {
-            log_message(
-                &effective_log_level,
-                LogLevel::Info,
-                &format!("Watching config file: {path}"),
-            );
-            Some(watcher)
+    let mut config_watcher = if let Some(path) = config_file_path {
+        match ConfigWatcher::new(&path) {
+            Ok(watcher) => {
+                log_message(
+                    &effective_log_level,
+                    LogLevel::Info,
+                    &format!("Watching config file: {path}"),
+                );
+                Some(watcher)
+            }
+            Err(e) => {
+                log_message(
+                    &effective_log_level,
+                    LogLevel::Warning,
+                    &format!("Failed to initialize config file watcher: {e}"),
+                );
+                None
+            }
         }
-        Err(e) => {
-            log_message(
-                &effective_log_level,
-                LogLevel::Warning,
-                &format!("Failed to initialize config file watcher: {e}"),
-            );
-            None
-        }
-    } } else {
+    } else {
         log_message(
             &effective_log_level,
             LogLevel::Warning,
