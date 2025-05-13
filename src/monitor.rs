@@ -20,21 +20,21 @@ pub enum SysMonitorError {
 }
 
 impl From<io::Error> for SysMonitorError {
-    fn from(err: io::Error) -> SysMonitorError {
-        SysMonitorError::Io(err)
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
     }
 }
 
 impl std::fmt::Display for SysMonitorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SysMonitorError::Io(e) => write!(f, "I/O error: {}", e),
-            SysMonitorError::ReadError(s) => write!(f, "Failed to read sysfs path: {}", s),
-            SysMonitorError::ParseError(s) => write!(f, "Failed to parse value: {}", s),
-            SysMonitorError::ProcStatParseError(s) => {
-                write!(f, "Failed to parse /proc/stat: {}", s)
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::ReadError(s) => write!(f, "Failed to read sysfs path: {s}"),
+            Self::ParseError(s) => write!(f, "Failed to parse value: {s}"),
+            Self::ProcStatParseError(s) => {
+                write!(f, "Failed to parse /proc/stat: {s}")
             }
-            SysMonitorError::NotAvailable(s) => write!(f, "Information not available: {}", s),
+            Self::NotAvailable(s) => write!(f, "Information not available: {s}"),
         }
     }
 }
@@ -123,7 +123,7 @@ fn get_logical_core_count() -> Result<u32> {
                     // Check if it's a directory representing a core that can have cpufreq
                     if entry.path().join("cpufreq").exists() {
                         count += 1;
-                    } else if Path::new(&format!("/sys/devices/system/cpu/{}/online", name_str))
+                    } else if Path::new(&format!("/sys/devices/system/cpu/{name_str}/online"))
                         .exists()
                     {
                         // Fallback for cores that might not have cpufreq but are online (e.g. E-cores on some setups before driver loads)
@@ -159,7 +159,7 @@ struct CpuTimes {
 }
 
 impl CpuTimes {
-    fn total_time(&self) -> u64 {
+    const fn total_time(&self) -> u64 {
         self.user
             + self.nice
             + self.system
@@ -170,7 +170,7 @@ impl CpuTimes {
             + self.steal
     }
 
-    fn idle_time(&self) -> u64 {
+    const fn idle_time(&self) -> u64 {
         self.idle + self.iowait
     }
 }
@@ -180,20 +180,18 @@ fn read_all_cpu_times() -> Result<HashMap<u32, CpuTimes>> {
     let mut cpu_times_map = HashMap::new();
 
     for line in content.lines() {
-        if line.starts_with("cpu") && line.chars().nth(3).map_or(false, |c| c.is_digit(10)) {
+        if line.starts_with("cpu") && line.chars().nth(3).is_some_and(|c| c.is_ascii_digit()) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() < 11 {
                 return Err(SysMonitorError::ProcStatParseError(format!(
-                    "Line too short: {}",
-                    line
+                    "Line too short: {line}"
                 )));
             }
 
             let core_id_str = &parts[0][3..];
             let core_id = core_id_str.parse::<u32>().map_err(|_| {
                 SysMonitorError::ProcStatParseError(format!(
-                    "Failed to parse core_id: {}",
-                    core_id_str
+                    "Failed to parse core_id: {core_id_str}"
                 ))
             })?;
 
@@ -270,7 +268,7 @@ pub fn get_cpu_core_info(
     prev_times: &CpuTimes,
     current_times: &CpuTimes,
 ) -> Result<CpuCoreInfo> {
-    let cpufreq_path = PathBuf::from(format!("/sys/devices/system/cpu/cpu{}/cpufreq/", core_id));
+    let cpufreq_path = PathBuf::from(format!("/sys/devices/system/cpu/cpu{core_id}/cpufreq/"));
 
     let current_frequency_mhz = read_sysfs_value::<u32>(cpufreq_path.join("scaling_cur_freq"))
         .map(|khz| khz / 1000)
@@ -405,21 +403,21 @@ pub fn get_cpu_core_info(
 fn get_temperature_for_core(hw_path: &Path, core_id: u32, label_prefix: &str) -> Option<f32> {
     for i in 1..=32 {
         // Increased range to handle systems with many sensors
-        let label_path = hw_path.join(format!("temp{}_label", i));
-        let input_path = hw_path.join(format!("temp{}_input", i));
+        let label_path = hw_path.join(format!("temp{i}_label"));
+        let input_path = hw_path.join(format!("temp{i}_input"));
 
         if label_path.exists() && input_path.exists() {
             if let Ok(label) = read_sysfs_file_trimmed(&label_path) {
                 // Match various common label formats:
                 // "Core X", "core X", "Core-X", "CPU Core X", etc.
-                let core_pattern = format!("{} {}", label_prefix, core_id);
-                let alt_pattern = format!("{}-{}", label_prefix, core_id);
+                let core_pattern = format!("{label_prefix} {core_id}");
+                let alt_pattern = format!("{label_prefix}-{core_id}");
 
                 if label.eq_ignore_ascii_case(&core_pattern)
                     || label.eq_ignore_ascii_case(&alt_pattern)
                     || label
                         .to_lowercase()
-                        .contains(&format!("core {}", core_id).to_lowercase())
+                        .contains(&format!("core {core_id}").to_lowercase())
                 {
                     if let Ok(temp_mc) = read_sysfs_value::<i32>(&input_path) {
                         return Some(temp_mc as f32 / 1000.0);
@@ -434,8 +432,8 @@ fn get_temperature_for_core(hw_path: &Path, core_id: u32, label_prefix: &str) ->
 // Finds generic sensor temperatures by label
 fn get_generic_sensor_temperature(hw_path: &Path, label_name: &str) -> Option<f32> {
     for i in 1..=32 {
-        let label_path = hw_path.join(format!("temp{}_label", i));
-        let input_path = hw_path.join(format!("temp{}_input", i));
+        let label_path = hw_path.join(format!("temp{i}_label"));
+        let input_path = hw_path.join(format!("temp{i}_input"));
 
         if label_path.exists() && input_path.exists() {
             if let Ok(label) = read_sysfs_file_trimmed(&label_path) {
@@ -460,7 +458,7 @@ fn get_generic_sensor_temperature(hw_path: &Path, label_name: &str) -> Option<f3
 // Fallback to any temperature reading from a sensor
 fn get_fallback_temperature(hw_path: &Path) -> Option<f32> {
     for i in 1..=32 {
-        let input_path = hw_path.join(format!("temp{}_input", i));
+        let input_path = hw_path.join(format!("temp{i}_input"));
 
         if input_path.exists() {
             if let Ok(temp_mc) = read_sysfs_value::<i32>(&input_path) {
@@ -488,12 +486,12 @@ pub fn get_all_cpu_core_info() -> Result<Vec<CpuCoreInfo>> {
                 Ok(info) => core_infos.push(info),
                 Err(e) => {
                     // Log or handle error for a single core, maybe push a partial info or skip
-                    eprintln!("Error getting info for core {}: {}", core_id, e);
+                    eprintln!("Error getting info for core {core_id}: {e}");
                 }
             }
         } else {
             // Log or handle missing times for a core
-            eprintln!("Missing CPU time data for core {}", core_id);
+            eprintln!("Missing CPU time data for core {core_id}");
         }
     }
     Ok(core_infos)
@@ -511,9 +509,7 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> Result<CpuGlobalInfo> {
     };
 
     let available_governors = if cpufreq_base.join("scaling_available_governors").exists() {
-        read_sysfs_file_trimmed(cpufreq_base.join("scaling_available_governors"))
-            .map(|s| s.split_whitespace().map(String::from).collect())
-            .unwrap_or_else(|_| vec![])
+        read_sysfs_file_trimmed(cpufreq_base.join("scaling_available_governors")).map_or_else(|_| vec![], |s| s.split_whitespace().map(String::from).collect())
     } else {
         vec![]
     };
@@ -532,43 +528,46 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> Result<CpuGlobalInfo> {
         None
     };
 
-    let epp = read_sysfs_file_trimmed(cpufreq_base.join("energy_performance_preference")).ok();
+    // EPP (Energy Performance Preference)
+    let energy_perf_pref =
+        read_sysfs_file_trimmed(cpufreq_base.join("energy_performance_preference")).ok();
 
-    // EPB is often an integer 0-15. Reading as string for now.
-    let epb = read_sysfs_file_trimmed(cpufreq_base.join("energy_performance_bias")).ok();
+    // EPB (Energy Performance Bias)
+    let energy_perf_bias =
+        read_sysfs_file_trimmed(cpufreq_base.join("energy_performance_bias")).ok();
 
     let platform_profile = read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile").ok();
     let _platform_profile_choices =
         read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile_choices").ok();
 
     // Calculate average CPU temperature from the core temperatures
-    let average_temperature_celsius = if !cpu_cores.is_empty() {
+    let average_temperature_celsius = if cpu_cores.is_empty() {
+        None
+    } else {
         // Filter cores with temperature readings, then calculate average
         let cores_with_temp: Vec<&CpuCoreInfo> = cpu_cores
             .iter()
             .filter(|core| core.temperature_celsius.is_some())
             .collect();
 
-        if !cores_with_temp.is_empty() {
+        if cores_with_temp.is_empty() {
+            None
+        } else {
             // Sum up all temperatures and divide by count
             let sum: f32 = cores_with_temp
                 .iter()
                 .map(|core| core.temperature_celsius.unwrap())
                 .sum();
             Some(sum / cores_with_temp.len() as f32)
-        } else {
-            None
         }
-    } else {
-        None
     };
 
     Ok(CpuGlobalInfo {
         current_governor,
         available_governors,
         turbo_status,
-        epp,
-        epb,
+        epp: energy_perf_pref,
+        epb: energy_perf_bias,
         platform_profile,
         average_temperature_celsius,
     })
@@ -578,14 +577,13 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
     let mut batteries = Vec::new();
     let power_supply_path = Path::new("/sys/class/power_supply");
 
-    if (!power_supply_path.exists()) {
+    if !power_supply_path.exists() {
         return Ok(batteries); // no power supply directory
     }
 
     let ignored_supplies = config
         .ignored_power_supplies
-        .as_ref()
-        .cloned()
+        .clone()
         .unwrap_or_default();
 
     // Determine overall AC connection status
@@ -649,7 +647,7 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
                     if let (Some(c), Some(v)) = (current_ua, voltage_uv) {
                         // Power (W) = (Voltage (V) * Current (A))
                         // (v / 1e6 V) * (c / 1e6 A) = (v * c / 1e12) W
-                        Some((c as f64 * v as f64 / 1_000_000_000_000.0) as f32)
+                        Some((f64::from(c) * f64::from(v) / 1_000_000_000_000.0) as f32)
                     } else {
                         None
                     }

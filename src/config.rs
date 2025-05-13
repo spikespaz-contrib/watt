@@ -1,30 +1,32 @@
+use crate::core::TurboSetting;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
 use std::fs;
-use crate::core::{OperationalMode, TurboSetting};
+use std::path::PathBuf;
 
 // Structs for configuration using serde::Deserialize
 #[derive(Deserialize, Debug, Clone)]
 pub struct ProfileConfig {
     pub governor: Option<String>,
     pub turbo: Option<TurboSetting>,
-    pub epp: Option<String>,      // Energy Performance Preference (EPP)
-    pub epb: Option<String>,      // Energy Performance Bias (EPB) - usually an integer, but string for flexibility from sysfs
+    pub epp: Option<String>, // Energy Performance Preference (EPP)
+    pub epb: Option<String>, // Energy Performance Bias (EPB) - usually an integer, but string for flexibility from sysfs
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
+    pub turbo_auto_settings: Option<TurboAutoSettings>,
 }
 
 impl Default for ProfileConfig {
     fn default() -> Self {
-        ProfileConfig {
+        Self {
             governor: Some("schedutil".to_string()), // common sensible default (?)
             turbo: Some(TurboSetting::Auto),
-            epp: None, // defaults depend on governor and system
-            epb: None, // defaults depend on governor and system
-            min_freq_mhz: None, // no override
-            max_freq_mhz: None, // no override
+            epp: None,              // defaults depend on governor and system
+            epb: None,              // defaults depend on governor and system
+            min_freq_mhz: None,     // no override
+            max_freq_mhz: None,     // no override
             platform_profile: None, // no override
+            turbo_auto_settings: Some(TurboAutoSettings::default()),
         }
     }
 }
@@ -39,9 +41,11 @@ pub struct AppConfig {
     pub ignored_power_supplies: Option<Vec<String>>,
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
+    #[serde(default)]
+    pub daemon: DaemonConfig,
 }
 
-fn default_poll_interval_sec() -> u64 {
+const fn default_poll_interval_sec() -> u64 {
     5
 }
 
@@ -55,24 +59,24 @@ pub enum ConfigError {
 }
 
 impl From<std::io::Error> for ConfigError {
-    fn from(err: std::io::Error) -> ConfigError {
-        ConfigError::Io(err)
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
     }
 }
 
 impl From<toml::de::Error> for ConfigError {
-    fn from(err: toml::de::Error) -> ConfigError {
-        ConfigError::Toml(err)
+    fn from(err: toml::de::Error) -> Self {
+        Self::Toml(err)
     }
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::Io(e) => write!(f, "I/O error: {}", e),
-            ConfigError::Toml(e) => write!(f, "TOML parsing error: {}", e),
-            ConfigError::NoValidConfigFound => write!(f, "No valid configuration file found."),
-            ConfigError::HomeDirNotFound => write!(f, "Could not determine user home directory."),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Toml(e) => write!(f, "TOML parsing error: {e}"),
+            Self::NoValidConfigFound => write!(f, "No valid configuration file found."),
+            Self::HomeDirNotFound => write!(f, "Could not determine user home directory."),
         }
     }
 }
@@ -90,7 +94,9 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
         let user_config_path = home_dir.join(".config/auto_cpufreq_rs/config.toml");
         config_paths.push(user_config_path);
     } else {
-        eprintln!("Warning: Could not determine home directory. User-specific config will not be loaded.");
+        eprintln!(
+            "Warning: Could not determine home directory. User-specific config will not be loaded."
+        );
     }
 
     // System-wide path
@@ -108,9 +114,23 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
                             let app_config = AppConfig {
                                 charger: ProfileConfig::from(toml_app_config.charger),
                                 battery: ProfileConfig::from(toml_app_config.battery),
-                                battery_charge_thresholds: toml_app_config.battery_charge_thresholds,
+                                battery_charge_thresholds: toml_app_config
+                                    .battery_charge_thresholds,
                                 ignored_power_supplies: toml_app_config.ignored_power_supplies,
                                 poll_interval_sec: toml_app_config.poll_interval_sec,
+                                daemon: DaemonConfig {
+                                    poll_interval_sec: toml_app_config.daemon.poll_interval_sec,
+                                    adaptive_interval: toml_app_config.daemon.adaptive_interval,
+                                    min_poll_interval_sec: toml_app_config
+                                        .daemon
+                                        .min_poll_interval_sec,
+                                    max_poll_interval_sec: toml_app_config
+                                        .daemon
+                                        .max_poll_interval_sec,
+                                    throttle_on_battery: toml_app_config.daemon.throttle_on_battery,
+                                    log_level: toml_app_config.daemon.log_level,
+                                    stats_file_path: toml_app_config.daemon.stats_file_path,
+                                },
                             };
                             return Ok(app_config);
                         }
@@ -135,6 +155,7 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
         battery_charge_thresholds: default_toml_config.battery_charge_thresholds,
         ignored_power_supplies: default_toml_config.ignored_power_supplies,
         poll_interval_sec: default_toml_config.poll_interval_sec,
+        daemon: DaemonConfig::default(),
     })
 }
 
@@ -160,11 +181,13 @@ pub struct AppConfigToml {
     pub ignored_power_supplies: Option<Vec<String>>,
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
+    #[serde(default)]
+    pub daemon: DaemonConfigToml,
 }
 
 impl Default for ProfileConfigToml {
     fn default() -> Self {
-        ProfileConfigToml {
+        Self {
             governor: Some("schedutil".to_string()),
             turbo: Some("auto".to_string()),
             epp: None,
@@ -176,22 +199,155 @@ impl Default for ProfileConfigToml {
     }
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct TurboAutoSettings {
+    #[serde(default = "default_load_threshold_high")]
+    pub load_threshold_high: f32,
+    #[serde(default = "default_load_threshold_low")]
+    pub load_threshold_low: f32,
+    #[serde(default = "default_temp_threshold_high")]
+    pub temp_threshold_high: f32,
+}
+
+// Default thresholds for Auto turbo mode
+pub const DEFAULT_LOAD_THRESHOLD_HIGH: f32 = 70.0; // enable turbo if load is above this
+pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // disable turbo if load is below this
+pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // disable turbo if temperature is above this
+
+const fn default_load_threshold_high() -> f32 {
+    DEFAULT_LOAD_THRESHOLD_HIGH
+}
+const fn default_load_threshold_low() -> f32 {
+    DEFAULT_LOAD_THRESHOLD_LOW
+}
+const fn default_temp_threshold_high() -> f32 {
+    DEFAULT_TEMP_THRESHOLD_HIGH
+}
+
+impl Default for TurboAutoSettings {
+    fn default() -> Self {
+        Self {
+            load_threshold_high: DEFAULT_LOAD_THRESHOLD_HIGH,
+            load_threshold_low: DEFAULT_LOAD_THRESHOLD_LOW,
+            temp_threshold_high: DEFAULT_TEMP_THRESHOLD_HIGH,
+        }
+    }
+}
 
 impl From<ProfileConfigToml> for ProfileConfig {
     fn from(toml_config: ProfileConfigToml) -> Self {
-        ProfileConfig {
+        Self {
             governor: toml_config.governor,
-            turbo: toml_config.turbo.and_then(|s| match s.to_lowercase().as_str() {
-                "always" => Some(TurboSetting::Always),
-                "auto" => Some(TurboSetting::Auto),
-                "never" => Some(TurboSetting::Never),
-                _ => None,
-            }),
+            turbo: toml_config
+                .turbo
+                .and_then(|s| match s.to_lowercase().as_str() {
+                    "always" => Some(TurboSetting::Always),
+                    "auto" => Some(TurboSetting::Auto),
+                    "never" => Some(TurboSetting::Never),
+                    _ => None,
+                }),
             epp: toml_config.epp,
             epb: toml_config.epb,
             min_freq_mhz: toml_config.min_freq_mhz,
             max_freq_mhz: toml_config.max_freq_mhz,
             platform_profile: toml_config.platform_profile,
+            turbo_auto_settings: Some(TurboAutoSettings::default()),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct DaemonConfig {
+    #[serde(default = "default_poll_interval_sec")]
+    pub poll_interval_sec: u64,
+    #[serde(default = "default_adaptive_interval")]
+    pub adaptive_interval: bool,
+    #[serde(default = "default_min_poll_interval_sec")]
+    pub min_poll_interval_sec: u64,
+    #[serde(default = "default_max_poll_interval_sec")]
+    pub max_poll_interval_sec: u64,
+    #[serde(default = "default_throttle_on_battery")]
+    pub throttle_on_battery: bool,
+    #[serde(default = "default_log_level")]
+    pub log_level: LogLevel,
+    #[serde(default = "default_stats_file_path")]
+    pub stats_file_path: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Error,
+    Warning,
+    Info,
+    Debug,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_sec: default_poll_interval_sec(),
+            adaptive_interval: default_adaptive_interval(),
+            min_poll_interval_sec: default_min_poll_interval_sec(),
+            max_poll_interval_sec: default_max_poll_interval_sec(),
+            throttle_on_battery: default_throttle_on_battery(),
+            log_level: default_log_level(),
+            stats_file_path: default_stats_file_path(),
+        }
+    }
+}
+
+const fn default_adaptive_interval() -> bool {
+    false
+}
+
+const fn default_min_poll_interval_sec() -> u64 {
+    1
+}
+
+const fn default_max_poll_interval_sec() -> u64 {
+    30
+}
+
+const fn default_throttle_on_battery() -> bool {
+    true
+}
+
+const fn default_log_level() -> LogLevel {
+    LogLevel::Info
+}
+
+const fn default_stats_file_path() -> Option<String> {
+    None
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct DaemonConfigToml {
+    #[serde(default = "default_poll_interval_sec")]
+    pub poll_interval_sec: u64,
+    #[serde(default = "default_adaptive_interval")]
+    pub adaptive_interval: bool,
+    #[serde(default = "default_min_poll_interval_sec")]
+    pub min_poll_interval_sec: u64,
+    #[serde(default = "default_max_poll_interval_sec")]
+    pub max_poll_interval_sec: u64,
+    #[serde(default = "default_throttle_on_battery")]
+    pub throttle_on_battery: bool,
+    #[serde(default = "default_log_level")]
+    pub log_level: LogLevel,
+    #[serde(default = "default_stats_file_path")]
+    pub stats_file_path: Option<String>,
+}
+
+impl Default for DaemonConfigToml {
+    fn default() -> Self {
+        Self {
+            poll_interval_sec: default_poll_interval_sec(),
+            adaptive_interval: default_adaptive_interval(),
+            min_poll_interval_sec: default_min_poll_interval_sec(),
+            max_poll_interval_sec: default_max_poll_interval_sec(),
+            throttle_on_battery: default_throttle_on_battery(),
+            log_level: default_log_level(),
+            stats_file_path: default_stats_file_path(),
         }
     }
 }
