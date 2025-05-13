@@ -1,6 +1,7 @@
 use crate::config::{AppConfig, ProfileConfig};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
-use crate::cpu::{self, ControlError};
+use crate::cpu::{self};
+use crate::util::error::ControlError;
 
 #[derive(Debug)]
 pub enum EngineError {
@@ -67,7 +68,7 @@ pub fn determine_and_apply_settings(
         // Otherwise, check the ac_connected status from the (first) battery.
         // XXX: This relies on the setting ac_connected in BatteryInfo being set correctly.
         let on_ac_power = report.batteries.is_empty()
-            || report.batteries.first().is_some_and(|b| b.ac_connected);
+            || report.batteries.first().map_or(false, |b| b.ac_connected);
 
         if on_ac_power {
             println!("Engine: On AC power, selecting Charger profile.");

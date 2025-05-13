@@ -1,5 +1,8 @@
 use crate::config::AppConfig;
 use crate::core::{BatteryInfo, CpuCoreInfo, CpuGlobalInfo, SystemInfo, SystemLoad, SystemReport};
+use crate::cpu::{get_logical_core_count, get_platform_profiles};
+use crate::util::error::ControlError;
+use crate::util::error::SysMonitorError;
 use std::{
     collections::HashMap,
     fs, io,
@@ -9,35 +12,6 @@ use std::{
     time::Duration,
     time::SystemTime,
 };
-
-#[derive(Debug)]
-pub enum SysMonitorError {
-    Io(io::Error),
-    ReadError(String),
-    ParseError(String),
-    ProcStatParseError(String),
-    NotAvailable(String),
-}
-
-impl From<io::Error> for SysMonitorError {
-    fn from(err: io::Error) -> Self {
-        Self::Io(err)
-    }
-}
-
-impl std::fmt::Display for SysMonitorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::ReadError(s) => write!(f, "Failed to read sysfs path: {s}"),
-            Self::ParseError(s) => write!(f, "Failed to parse value: {s}"),
-            Self::ProcStatParseError(s) => {
-                write!(f, "Failed to parse /proc/stat: {s}")
-            }
-            Self::NotAvailable(s) => write!(f, "Information not available: {s}"),
-        }
-    }
-}
 
 impl std::error::Error for SysMonitorError {}
 
@@ -64,83 +38,15 @@ fn read_sysfs_value<T: FromStr>(path: impl AsRef<Path>) -> Result<T> {
     })
 }
 
-pub fn get_system_info() -> Result<SystemInfo> {
-    let mut cpu_model = "Unknown".to_string();
-    if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
-        for line in cpuinfo.lines() {
-            if line.starts_with("model name") {
-                if let Some(val) = line.split(':').nth(1) {
-                    cpu_model = val.trim().to_string();
-                    break;
-                }
-            }
-        }
-    }
-
+pub fn get_system_info() -> SystemInfo {
+    let cpu_model = get_cpu_model().unwrap_or_else(|_| "Unknown".to_string());
+    let linux_distribution = get_linux_distribution().unwrap_or_else(|_| "Unknown".to_string());
     let architecture = std::env::consts::ARCH.to_string();
 
-    let mut linux_distribution = "Unknown".to_string();
-    if let Ok(os_release) = fs::read_to_string("/etc/os-release") {
-        for line in os_release.lines() {
-            if line.starts_with("PRETTY_NAME=") {
-                if let Some(val) = line.split('=').nth(1) {
-                    linux_distribution = val.trim_matches('"').to_string();
-                    break;
-                }
-            }
-        }
-    } else if let Ok(lsb_release) = fs::read_to_string("/etc/lsb-release") {
-        // fallback for some systems
-        for line in lsb_release.lines() {
-            if line.starts_with("DISTRIB_DESCRIPTION=") {
-                if let Some(val) = line.split('=').nth(1) {
-                    linux_distribution = val.trim_matches('"').to_string();
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(SystemInfo {
+    SystemInfo {
         cpu_model,
         architecture,
         linux_distribution,
-    })
-}
-
-fn get_logical_core_count() -> Result<u32> {
-    let mut count = 0;
-    let path = Path::new("/sys/devices/system/cpu");
-    if path.exists() {
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            if let Some(name_str) = name.to_str() {
-                if name_str.starts_with("cpu")
-                    && name_str.len() > 3
-                    && name_str[3..].chars().all(char::is_numeric)
-                {
-                    // Check if it's a directory representing a core that can have cpufreq
-                    if entry.path().join("cpufreq").exists() {
-                        count += 1;
-                    } else if Path::new(&format!("/sys/devices/system/cpu/{name_str}/online"))
-                        .exists()
-                    {
-                        // Fallback for cores that might not have cpufreq but are online (e.g. E-cores on some setups before driver loads)
-                        // This is a simplification; true cpufreq capability is key.
-                        // If cpufreq dir doesn't exist, it might not be controllable by this tool.
-                        // For counting purposes, we count it if it's an online CPU.
-                        count += 1;
-                    }
-                }
-            }
-        }
-    }
-    if count == 0 {
-        // Fallback to num_cpus crate if sysfs parsing fails or yields 0
-        Ok(num_cpus::get() as u32)
-    } else {
-        Ok(count)
     }
 }
 
@@ -474,7 +380,9 @@ pub fn get_all_cpu_core_info() -> Result<Vec<CpuCoreInfo>> {
     thread::sleep(Duration::from_millis(250)); // Interval for CPU usage calculation
     let final_cpu_times = read_all_cpu_times()?;
 
-    let num_cores = get_logical_core_count()?; // Or derive from keys in cpu_times
+    let num_cores = get_logical_core_count()
+        .map_err(|_| SysMonitorError::ReadError("Could not get the number of cores".to_string()))?;
+
     let mut core_infos = Vec::with_capacity(num_cores as usize);
 
     for core_id in 0..num_cores {
@@ -497,44 +405,38 @@ pub fn get_all_cpu_core_info() -> Result<Vec<CpuCoreInfo>> {
     Ok(core_infos)
 }
 
-pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> Result<CpuGlobalInfo> {
+pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
     // FIXME: Assume global settings can be read from cpu0 or are consistent.
     // This might not work properly for heterogeneous systems (e.g. big.LITTLE)
-    let cpufreq_base = Path::new("/sys/devices/system/cpu/cpu0/cpufreq/");
-
-    let current_governor = if cpufreq_base.join("scaling_governor").exists() {
-        read_sysfs_file_trimmed(cpufreq_base.join("scaling_governor")).ok()
+    let cpufreq_base_path = Path::new("/sys/devices/system/cpu/cpu0/cpufreq/");
+    let turbo_status_path = Path::new("/sys/devices/system/cpu/intel_pstate/no_turbo");
+    let boost_path = Path::new("/sys/devices/system/cpu/cpufreq/boost");
+    let current_governor = if cpufreq_base_path.join("scaling_governor").exists() {
+        read_sysfs_file_trimmed(cpufreq_base_path.join("scaling_governor")).ok()
     } else {
         None
     };
 
-    let available_governors = if cpufreq_base.join("scaling_available_governors").exists() {
-        read_sysfs_file_trimmed(cpufreq_base.join("scaling_available_governors")).map_or_else(|_| vec![], |s| s.split_whitespace().map(String::from).collect())
-    } else {
-        vec![]
-    };
+    let available_governors = get_platform_profiles().unwrap_or_else(|_| vec![]);
 
-    let turbo_status = if Path::new("/sys/devices/system/cpu/intel_pstate/no_turbo").exists() {
+    let turbo_status = if turbo_status_path.exists() {
         // 0 means turbo enabled, 1 means disabled for intel_pstate
-        read_sysfs_value::<u8>("/sys/devices/system/cpu/intel_pstate/no_turbo")
+        read_sysfs_value::<u8>(turbo_status_path)
             .map(|val| val == 0)
             .ok()
-    } else if Path::new("/sys/devices/system/cpu/cpufreq/boost").exists() {
+    } else if boost_path.exists() {
         // 1 means turbo enabled, 0 means disabled for generic cpufreq boost
-        read_sysfs_value::<u8>("/sys/devices/system/cpu/cpufreq/boost")
-            .map(|val| val == 1)
-            .ok()
+        read_sysfs_value::<u8>(boost_path).map(|val| val == 1).ok()
     } else {
         None
     };
-
     // EPP (Energy Performance Preference)
     let energy_perf_pref =
-        read_sysfs_file_trimmed(cpufreq_base.join("energy_performance_preference")).ok();
+        read_sysfs_file_trimmed(cpufreq_base_path.join("energy_performance_preference")).ok();
 
     // EPB (Energy Performance Bias)
     let energy_perf_bias =
-        read_sysfs_file_trimmed(cpufreq_base.join("energy_performance_bias")).ok();
+        read_sysfs_file_trimmed(cpufreq_base_path.join("energy_performance_bias")).ok();
 
     let platform_profile = read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile").ok();
     let _platform_profile_choices =
@@ -562,7 +464,7 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> Result<CpuGlobalInfo> {
         }
     };
 
-    Ok(CpuGlobalInfo {
+    CpuGlobalInfo {
         current_governor,
         available_governors,
         turbo_status,
@@ -570,7 +472,7 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> Result<CpuGlobalInfo> {
         epb: energy_perf_bias,
         platform_profile,
         average_temperature_celsius,
-    })
+    }
 }
 
 pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
@@ -581,10 +483,7 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
         return Ok(batteries); // no power supply directory
     }
 
-    let ignored_supplies = config
-        .ignored_power_supplies
-        .clone()
-        .unwrap_or_default();
+    let ignored_supplies = config.ignored_power_supplies.clone().unwrap_or_default();
 
     // Determine overall AC connection status
     let mut overall_ac_connected = false;
@@ -701,9 +600,9 @@ pub fn get_system_load() -> Result<SystemLoad> {
 }
 
 pub fn collect_system_report(config: &AppConfig) -> Result<SystemReport> {
-    let system_info = get_system_info()?;
+    let system_info = get_system_info();
     let cpu_cores = get_all_cpu_core_info()?;
-    let cpu_global = get_cpu_global_info(&cpu_cores)?;
+    let cpu_global = get_cpu_global_info(&cpu_cores);
     let batteries = get_battery_info(config)?;
     let system_load = get_system_load()?;
 
@@ -715,4 +614,65 @@ pub fn collect_system_report(config: &AppConfig) -> Result<SystemReport> {
         system_load,
         timestamp: SystemTime::now(),
     })
+}
+
+pub fn get_cpu_model() -> Result<String> {
+    let path = Path::new("/proc/cpuinfo");
+    let content = fs::read_to_string(path).map_err(|_| {
+        SysMonitorError::ReadError(format!("Cannot read contents of {}.", path.display()))
+    })?;
+
+    for line in content.lines() {
+        if line.starts_with("model name") {
+            if let Some(val) = line.split(':').nth(1) {
+                let cpu_model = val.trim().to_string();
+                return Ok(cpu_model);
+            }
+        }
+    }
+    Err(SysMonitorError::ParseError(
+        "Could not find CPU model name in /proc/cpuinfo.".to_string(),
+    ))
+}
+
+pub fn get_linux_distribution() -> Result<String> {
+    let os_release_path = Path::new("/etc/os-release");
+    let content = fs::read_to_string(os_release_path).map_err(|_| {
+        SysMonitorError::ReadError(format!(
+            "Cannot read contents of {}.",
+            os_release_path.display()
+        ))
+    })?;
+
+    for line in content.lines() {
+        if line.starts_with("PRETTY_NAME=") {
+            if let Some(val) = line.split('=').nth(1) {
+                let linux_distribution = val.trim_matches('"').to_string();
+                return Ok(linux_distribution);
+            }
+        }
+    }
+
+    let lsb_release_path = Path::new("/etc/lsb-release");
+    let content = fs::read_to_string(lsb_release_path).map_err(|_| {
+        SysMonitorError::ReadError(format!(
+            "Cannot read contents of {}.",
+            lsb_release_path.display()
+        ))
+    })?;
+
+    for line in content.lines() {
+        if line.starts_with("DISTRIB_DESCRIPTION=") {
+            if let Some(val) = line.split('=').nth(1) {
+                let linux_distribution = val.trim_matches('"').to_string();
+                return Ok(linux_distribution);
+            }
+        }
+    }
+
+    Err(SysMonitorError::ParseError(format!(
+        "Could not find distribution name in {} or {}.",
+        os_release_path.display(),
+        lsb_release_path.display()
+    )))
 }

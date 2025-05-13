@@ -1,45 +1,7 @@
 use crate::core::{GovernorOverrideMode, TurboSetting};
+use crate::util::error::ControlError;
 use core::str;
 use std::{fs, io, path::Path, string::ToString};
-
-#[derive(Debug)]
-pub enum ControlError {
-    Io(io::Error),
-    WriteError(String),
-    InvalidValueError(String),
-    NotSupported(String),
-    PermissionDenied(String),
-    InvalidProfile(String),
-}
-
-impl From<io::Error> for ControlError {
-    fn from(err: io::Error) -> Self {
-        match err.kind() {
-            io::ErrorKind::PermissionDenied => Self::PermissionDenied(err.to_string()),
-            _ => Self::Io(err),
-        }
-    }
-}
-
-impl std::fmt::Display for ControlError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::WriteError(s) => write!(f, "Failed to write to sysfs path: {s}"),
-            Self::InvalidValueError(s) => write!(f, "Invalid value for setting: {s}"),
-            Self::NotSupported(s) => write!(f, "Control action not supported: {s}"),
-            Self::PermissionDenied(s) => {
-                write!(f, "Permission denied: {s}. Try running with sudo.")
-            }
-            Self::InvalidProfile(s) => {
-                write!(
-                    f,
-                    "Invalid platform control profile {s} supplied, please provide a valid one."
-                )
-            }
-        }
-    }
-}
 
 impl std::error::Error for ControlError {}
 
@@ -58,16 +20,13 @@ fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
     })
 }
 
-fn for_each_cpu_core<F>(mut action: F) -> Result<()>
-where
-    F: FnMut(u32) -> Result<()>,
-{
+pub fn get_logical_core_count() -> Result<u32> {
     // Using num_cpus::get() for a reliable count of logical cores accessible.
     // The monitor module's get_logical_core_count might be more specific to cpufreq-capable cores,
     // but for applying settings, we might want to iterate over all reported by OS.
     // However, settings usually apply to cores with cpufreq.
     // Let's use a similar discovery to monitor's get_logical_core_count
-    let mut cores_to_act_on = Vec::new();
+    let mut num_cores: u32 = 0;
     let path = Path::new("/sys/devices/system/cpu");
     if !path.exists() {
         return Err(ControlError::NotSupported(format!(
@@ -97,20 +56,25 @@ where
             continue;
         }
 
-        if let Ok(core_id) = name[3..].parse::<u32>() {
-            cores_to_act_on.push(core_id);
+        if name[3..].parse::<u32>().is_ok() {
+            num_cores += 1;
         }
     }
-    if cores_to_act_on.is_empty() {
+    if num_cores == 0 {
         // Fallback if sysfs iteration above fails to find any cpufreq cores
-        #[allow(clippy::cast_possible_truncation)]
-        let num_cores = num_cpus::get() as u32;
-        for core_id in 0..num_cores {
-            cores_to_act_on.push(core_id);
-        }
+        num_cores = num_cpus::get() as u32;
     }
 
-    for core_id in cores_to_act_on {
+    Ok(num_cores)
+}
+
+fn for_each_cpu_core<F>(mut action: F) -> Result<()>
+where
+    F: FnMut(u32) -> Result<()>,
+{
+    let num_cores: u32 = get_logical_core_count()?;
+
+    for core_id in 0u32..num_cores {
         action(core_id)?;
     }
     Ok(())
@@ -264,12 +228,8 @@ pub fn get_platform_profiles() -> Result<Vec<String>> {
         )));
     }
 
-    let buf = fs::read(path)
+    let content = fs::read_to_string(path)
         .map_err(|_| ControlError::PermissionDenied(format!("Cannot read contents of {path}.")))?;
-
-    let content = str::from_utf8(&buf).map_err(|_| {
-        ControlError::NotSupported(format!("No platform profile choices found at {path}."))
-    })?;
 
     Ok(content
         .split_whitespace()
