@@ -1,3 +1,4 @@
+use crate::config::watcher::ConfigWatcher;
 use crate::config::{AppConfig, LogLevel};
 use crate::conflict;
 use crate::core::SystemReport;
@@ -10,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Run the daemon
-pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Set effective log level based on config and verbose flag
     let effective_log_level = if verbose {
         LogLevel::Debug
@@ -63,6 +64,48 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
         );
     }
 
+    // Initialize config file watcher if a path is available
+    let config_file_path = if let Ok(path) = std::env::var("SUPERFREQ_CONFIG") {
+        Some(path)
+    } else {
+        // Check standard config paths
+        let default_paths = [
+            "/etc/superfreq/config.toml",
+            "/etc/superfreq.toml",
+        ];
+
+        default_paths
+            .iter()
+            .find(|&path| std::path::Path::new(path).exists())
+            .map(|path| (*path).to_string())
+    };
+
+    let mut config_watcher = if let Some(path) = config_file_path { match ConfigWatcher::new(&path) {
+        Ok(watcher) => {
+            log_message(
+                &effective_log_level,
+                LogLevel::Info,
+                &format!("Watching config file: {path}"),
+            );
+            Some(watcher)
+        }
+        Err(e) => {
+            log_message(
+                &effective_log_level,
+                LogLevel::Warning,
+                &format!("Failed to initialize config file watcher: {e}"),
+            );
+            None
+        }
+    } } else {
+        log_message(
+            &effective_log_level,
+            LogLevel::Warning,
+            "No config file found to watch for changes.",
+        );
+        None
+    };
+
     // Variables for adaptive polling
     let mut current_poll_interval = config.daemon.poll_interval_sec;
     let mut last_settings_change = Instant::now();
@@ -71,6 +114,34 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::e
     // Main loop
     while running.load(Ordering::SeqCst) {
         let start_time = Instant::now();
+
+        // Check for configuration changes
+        if let Some(watcher) = &mut config_watcher {
+            if let Some(config_result) = watcher.check_for_changes() {
+                match config_result {
+                    Ok(new_config) => {
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Info,
+                            "Config file changed, updating configuration",
+                        );
+                        config = new_config;
+                        // Reset polling interval after config change
+                        current_poll_interval = config.daemon.poll_interval_sec;
+                        // Record this as a settings change for adaptive polling purposes
+                        last_settings_change = Instant::now();
+                    }
+                    Err(e) => {
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Error,
+                            &format!("Error loading new configuration: {e}"),
+                        );
+                        // Continue with existing config
+                    }
+                }
+            }
+        }
 
         match monitor::collect_system_report(&config) {
             Ok(report) => {

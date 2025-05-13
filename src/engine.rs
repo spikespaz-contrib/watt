@@ -1,37 +1,7 @@
 use crate::config::{AppConfig, ProfileConfig};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
-use crate::util::error::ControlError;
-
-#[derive(Debug)]
-pub enum EngineError {
-    ControlError(ControlError),
-    ConfigurationError(String),
-}
-
-impl From<ControlError> for EngineError {
-    fn from(err: ControlError) -> Self {
-        Self::ControlError(err)
-    }
-}
-
-impl std::fmt::Display for EngineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ControlError(e) => write!(f, "CPU control error: {e}"),
-            Self::ConfigurationError(s) => write!(f, "Configuration error: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for EngineError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ControlError(e) => Some(e),
-            Self::ConfigurationError(_) => None,
-        }
-    }
-}
+use crate::util::error::EngineError;
 
 /// Determines the appropriate CPU profile based on power status or forced mode,
 /// and applies the settings using functions from the `cpu` module.
@@ -67,8 +37,8 @@ pub fn determine_and_apply_settings(
         // If no batteries, assume AC power (desktop).
         // Otherwise, check the ac_connected status from the (first) battery.
         // XXX: This relies on the setting ac_connected in BatteryInfo being set correctly.
-        let on_ac_power = report.batteries.is_empty()
-            || report.batteries.first().map_or(false, |b| b.ac_connected);
+        let on_ac_power =
+            report.batteries.is_empty() || report.batteries.first().is_some_and(|b| b.ac_connected);
 
         if on_ac_power {
             println!("Engine: On AC power, selecting Charger profile.");
@@ -157,6 +127,14 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
             None
         }
     };
+
+    // Validate the configuration to ensure it's usable
+    if turbo_settings.load_threshold_high <= turbo_settings.load_threshold_low {
+        return Err(EngineError::ConfigurationError(
+            "Invalid turbo auto settings: high threshold must be greater than low threshold"
+                .to_string(),
+        ));
+    }
 
     // Decision logic for enabling/disabling turbo
     let enable_turbo = match (cpu_temp, avg_cpu_usage) {

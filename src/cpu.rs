@@ -3,8 +3,6 @@ use crate::util::error::ControlError;
 use core::str;
 use std::{fs, io, path::Path, string::ToString};
 
-impl std::error::Error for ControlError {}
-
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
 
 // Write a value to a sysfs file
@@ -104,21 +102,54 @@ pub fn set_turbo(setting: TurboSetting) -> Result<()> {
     let value_boost = match setting {
         TurboSetting::Always => "1", // boost = 1 means turbo is enabled
         TurboSetting::Never => "0",  // boost = 0 means turbo is disabled
-         TurboSetting::Auto => return Err(ControlError::InvalidValueError("Turbo Auto cannot be directly set via intel_pstate/no_turbo or cpufreq/boost. System default.".to_string())),
+        TurboSetting::Auto => return Err(ControlError::InvalidValueError("Turbo Auto cannot be directly set via intel_pstate/no_turbo or cpufreq/boost. System default.".to_string())),
     };
 
+    // AMD specific paths
+    let amd_pstate_path = "/sys/devices/system/cpu/amd_pstate/cpufreq/boost";
+    let msr_boost_path = "/sys/devices/system/cpu/cpufreq/amd_pstate_enable_boost";
+
+    // Path priority (from most to least specific)
     let pstate_path = "/sys/devices/system/cpu/intel_pstate/no_turbo";
     let boost_path = "/sys/devices/system/cpu/cpufreq/boost";
 
+    // Try each boost control path in order of specificity
     if Path::new(pstate_path).exists() {
         write_sysfs_value(pstate_path, value_pstate)
+    } else if Path::new(amd_pstate_path).exists() {
+        write_sysfs_value(amd_pstate_path, value_boost)
+    } else if Path::new(msr_boost_path).exists() {
+        write_sysfs_value(msr_boost_path, value_boost)
     } else if Path::new(boost_path).exists() {
         write_sysfs_value(boost_path, value_boost)
     } else {
-        Err(ControlError::NotSupported(
-            "Neither intel_pstate/no_turbo nor cpufreq/boost found.".to_string(),
-        ))
+        // Also try per-core cpufreq boost for some AMD systems
+        let result = try_set_per_core_boost(value_boost)?;
+        if result {
+            Ok(())
+        } else {
+            Err(ControlError::NotSupported(
+                "No supported CPU boost control mechanism found.".to_string(),
+            ))
+        }
     }
+}
+
+/// Try to set boost on a per-core basis for systems that support it
+fn try_set_per_core_boost(value: &str) -> Result<bool> {
+    let mut success = false;
+    let num_cores = get_logical_core_count()?;
+
+    for core_id in 0..num_cores {
+        let boost_path = format!("/sys/devices/system/cpu/cpu{core_id}/cpufreq/boost");
+
+        if Path::new(&boost_path).exists() {
+            write_sysfs_value(&boost_path, value)?;
+            success = true;
+        }
+    }
+
+    Ok(success)
 }
 
 pub fn set_epp(epp: &str, core_id: Option<u32>) -> Result<()> {

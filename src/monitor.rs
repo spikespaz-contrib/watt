@@ -1,19 +1,16 @@
 use crate::config::AppConfig;
 use crate::core::{BatteryInfo, CpuCoreInfo, CpuGlobalInfo, SystemInfo, SystemLoad, SystemReport};
-use crate::cpu::{get_logical_core_count, get_platform_profiles};
-use crate::util::error::ControlError;
+use crate::cpu::get_logical_core_count;
 use crate::util::error::SysMonitorError;
 use std::{
     collections::HashMap,
-    fs, io,
+    fs,
     path::{Path, PathBuf},
     str::FromStr,
     thread,
     time::Duration,
     time::SystemTime,
 };
-
-impl std::error::Error for SysMonitorError {}
 
 pub type Result<T, E = SysMonitorError> = std::result::Result<T, E>;
 
@@ -417,7 +414,17 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
         None
     };
 
-    let available_governors = get_platform_profiles().unwrap_or_else(|_| vec![]);
+    let available_governors = if cpufreq_base_path
+        .join("scaling_available_governors")
+        .exists()
+    {
+        read_sysfs_file_trimmed(cpufreq_base_path.join("scaling_available_governors")).map_or_else(
+            |_| vec![],
+            |s| s.split_whitespace().map(String::from).collect(),
+        )
+    } else {
+        vec![]
+    };
 
     let turbo_status = if turbo_status_path.exists() {
         // 0 means turbo enabled, 1 means disabled for intel_pstate
