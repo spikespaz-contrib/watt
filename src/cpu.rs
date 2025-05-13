@@ -3,8 +3,6 @@ use crate::util::error::ControlError;
 use core::str;
 use std::{fs, io, path::Path, string::ToString};
 
-impl std::error::Error for ControlError {}
-
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
 
 // Write a value to a sysfs file
