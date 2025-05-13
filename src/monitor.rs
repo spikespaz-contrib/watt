@@ -417,7 +417,14 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
         None
     };
 
-    let available_governors = get_platform_profiles().unwrap_or_else(|_| vec![]);
+    let available_governors = if cpufreq_base.join("scaling_available_governors").exists() {
+        read_sysfs_file_trimmed(cpufreq_base.join("scaling_available_governors")).map_or_else(
+            |_| vec![],
+            |s| s.split_whitespace().map(String::from).collect(),
+        )
+    } else {
+        vec![]
+    };
 
     let turbo_status = if turbo_status_path.exists() {
         // 0 means turbo enabled, 1 means disabled for intel_pstate

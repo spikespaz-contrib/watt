@@ -1,3 +1,4 @@
+mod cli;
 mod config;
 mod conflict;
 mod core;
@@ -45,6 +46,8 @@ enum Commands {
         #[clap(value_enum)]
         setting: TurboSetting,
     },
+    /// Display comprehensive debug information
+    Debug,
     /// Set Energy Performance Preference (EPP)
     SetEpp {
         epp: String,
@@ -202,6 +205,7 @@ fn main() {
         Some(Commands::SetPlatformProfile { profile }) => cpu::set_platform_profile(&profile)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
         Some(Commands::Daemon { verbose }) => daemon::run_daemon(config, verbose),
+        Some(Commands::Debug) => cli::debug::run_debug(&config),
         None => {
             println!("Welcome to superfreq! Use --help for commands.");
             println!("Current effective configuration: {config:?}");
