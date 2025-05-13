@@ -414,7 +414,10 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
         None
     };
 
-    let available_governors = if cpufreq_base_path.join("scaling_available_governors").exists() {
+    let available_governors = if cpufreq_base_path
+        .join("scaling_available_governors")
+        .exists()
+    {
         read_sysfs_file_trimmed(cpufreq_base_path.join("scaling_available_governors")).map_or_else(
             |_| vec![],
             |s| s.split_whitespace().map(String::from).collect(),

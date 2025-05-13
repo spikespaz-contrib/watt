@@ -104,11 +104,11 @@ pub fn set_turbo(setting: TurboSetting) -> Result<()> {
         TurboSetting::Never => "0",  // boost = 0 means turbo is disabled
         TurboSetting::Auto => return Err(ControlError::InvalidValueError("Turbo Auto cannot be directly set via intel_pstate/no_turbo or cpufreq/boost. System default.".to_string())),
     };
-    
+
     // AMD specific paths
     let amd_pstate_path = "/sys/devices/system/cpu/amd_pstate/cpufreq/boost";
     let msr_boost_path = "/sys/devices/system/cpu/cpufreq/amd_pstate_enable_boost";
-    
+
     // Path priority (from most to least specific)
     let pstate_path = "/sys/devices/system/cpu/intel_pstate/no_turbo";
     let boost_path = "/sys/devices/system/cpu/cpufreq/boost";
@@ -139,16 +139,16 @@ pub fn set_turbo(setting: TurboSetting) -> Result<()> {
 fn try_set_per_core_boost(value: &str) -> Result<bool> {
     let mut success = false;
     let num_cores = get_logical_core_count()?;
-    
+
     for core_id in 0..num_cores {
-        let boost_path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/boost", core_id);
-        
+        let boost_path = format!("/sys/devices/system/cpu/cpu{core_id}/cpufreq/boost");
+
         if Path::new(&boost_path).exists() {
             write_sysfs_value(&boost_path, value)?;
             success = true;
         }
     }
-    
+
     Ok(success)
 }
 

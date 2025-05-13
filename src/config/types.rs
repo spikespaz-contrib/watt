@@ -51,29 +51,29 @@ const fn default_poll_interval_sec() -> u64 {
 // Error type for config loading
 #[derive(Debug)]
 pub enum ConfigError {
-    Io(std::io::Error),
-    Toml(toml::de::Error),
+    IoError(std::io::Error),
+    TomlError(toml::de::Error),
     NoValidConfigFound,
     HomeDirNotFound,
 }
 
 impl From<std::io::Error> for ConfigError {
     fn from(err: std::io::Error) -> Self {
-        Self::Io(err)
+        Self::IoError(err)
     }
 }
 
 impl From<toml::de::Error> for ConfigError {
     fn from(err: toml::de::Error) -> Self {
-        Self::Toml(err)
+        Self::TomlError(err)
     }
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::Toml(e) => write!(f, "TOML parsing error: {e}"),
+            Self::IoError(e) => write!(f, "I/O error: {e}"),
+            Self::TomlError(e) => write!(f, "TOML parsing error: {e}"),
             Self::NoValidConfigFound => write!(f, "No valid configuration file found."),
             Self::HomeDirNotFound => write!(f, "Could not determine user home directory."),
         }

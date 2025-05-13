@@ -131,7 +131,8 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     // Validate the configuration to ensure it's usable
     if turbo_settings.load_threshold_high <= turbo_settings.load_threshold_low {
         return Err(EngineError::ConfigurationError(
-            "Invalid turbo auto settings: high threshold must be greater than low threshold".to_string()
+            "Invalid turbo auto settings: high threshold must be greater than low threshold"
+                .to_string(),
         ));
     }
 

@@ -1,5 +1,5 @@
-use crate::config::{AppConfig, LogLevel};
 use crate::config::watcher::ConfigWatcher;
+use crate::config::{AppConfig, LogLevel};
 use crate::conflict;
 use crate::core::SystemReport;
 use crate::engine;
@@ -65,31 +65,45 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
     }
 
     // Initialize config file watcher if a path is available
-    let config_file_path = if let Ok(path) = std::env::var("SUPERFREQ_CONFIG") { Some(path) } else {
+    let config_file_path = if let Ok(path) = std::env::var("SUPERFREQ_CONFIG") {
+        Some(path)
+    } else {
+        // Check standard config paths
         let default_paths = [
             "/etc/superfreq/config.toml",
             "/etc/superfreq.toml",
         ];
-        
-        default_paths.iter()
+
+        default_paths
+            .iter()
             .find(|&path| std::path::Path::new(path).exists())
             .map(|path| (*path).to_string())
     };
-    
-    let config_watcher: Option<ConfigWatcher> = match config_file_path {
-        Some(path) => {
-            match ConfigWatcher::new(&path) {
-                Ok(watcher) => {
-                    println!("Watching config file: {path}");
-                    Some(watcher)
-                },
-                Err(e) => {
-                    eprintln!("Failed to initialize config file watcher: {e}");
-                    None
-                }
-            }
-        },
-        None => None,
+
+    let mut config_watcher = if let Some(path) = config_file_path { match ConfigWatcher::new(&path) {
+        Ok(watcher) => {
+            log_message(
+                &effective_log_level,
+                LogLevel::Info,
+                &format!("Watching config file: {path}"),
+            );
+            Some(watcher)
+        }
+        Err(e) => {
+            log_message(
+                &effective_log_level,
+                LogLevel::Warning,
+                &format!("Failed to initialize config file watcher: {e}"),
+            );
+            None
+        }
+    } } else {
+        log_message(
+            &effective_log_level,
+            LogLevel::Warning,
+            "No config file found to watch for changes.",
+        );
+        None
     };
 
     // Variables for adaptive polling
@@ -102,17 +116,27 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
         let start_time = Instant::now();
 
         // Check for configuration changes
-        if let Some(watcher) = &config_watcher {
+        if let Some(watcher) = &mut config_watcher {
             if let Some(config_result) = watcher.check_for_changes() {
                 match config_result {
                     Ok(new_config) => {
-                        if verbose {
-                            println!("Config file changed, updating configuration");
-                        }
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Info,
+                            "Config file changed, updating configuration",
+                        );
                         config = new_config;
-                    },
+                        // Reset polling interval after config change
+                        current_poll_interval = config.daemon.poll_interval_sec;
+                        // Record this as a settings change for adaptive polling purposes
+                        last_settings_change = Instant::now();
+                    }
                     Err(e) => {
-                        eprintln!("Error loading new configuration: {e}");
+                        log_message(
+                            &effective_log_level,
+                            LogLevel::Error,
+                            &format!("Error loading new configuration: {e}"),
+                        );
                         // Continue with existing config
                     }
                 }

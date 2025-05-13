@@ -1,17 +1,18 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::Path;
-use std::sync::mpsc::{channel, Receiver};
-use std::time::Duration;
-use std::thread;
 use std::error::Error;
+use std::path::Path;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::thread;
+use std::time::Duration;
 
-use crate::config::{load_config, AppConfig};
+use crate::config::{AppConfig, load_config_from_path};
 
 /// Watches a configuration file for changes and reloads it when modified
 pub struct ConfigWatcher {
     rx: Receiver<Result<Event, notify::Error>>,
     _watcher: RecommendedWatcher, // keep watcher alive while watching
     config_path: String,
+    last_event_time: std::time::Instant,
 }
 
 impl ConfigWatcher {
@@ -29,6 +30,7 @@ impl ConfigWatcher {
             rx,
             _watcher: watcher,
             config_path: config_path.to_string(),
+            last_event_time: std::time::Instant::now(),
         })
     }
 
@@ -36,33 +38,53 @@ impl ConfigWatcher {
     ///
     /// # Returns
     ///
-    /// `Some(AppConfig)` if the config was reloaded, `None`` otherwise
-    pub fn check_for_changes(&self) -> Option<Result<AppConfig, Box<dyn Error>>> {
-        // Non-blocking check for file events
-        match self.rx.try_recv() {
-            Ok(Ok(event)) => {
-                // Only process write/modify events
-                if matches!(event.kind, EventKind::Modify(_)) {
-                    // Add a small delay to ensure the file write is complete
-                    thread::sleep(Duration::from_millis(100));
+    /// `Some(AppConfig)` if the config was reloaded, `None` otherwise
+    pub fn check_for_changes(&mut self) -> Option<Result<AppConfig, Box<dyn Error>>> {
+        // Process all pending events before deciding to reload
+        let mut should_reload = false;
 
-                    // Attempt to reload the config
-                    match load_config() {
-                        Ok(config) => {
-                            println!("Configuration file changed. Reloaded configuration.");
-                            Some(Ok(config))
-                        }
-                        Err(e) => {
-                            eprintln!("Error reloading configuration: {e}");
-                            Some(Err(Box::new(e)))
-                        }
+        loop {
+            match self.rx.try_recv() {
+                Ok(Ok(event)) => {
+                    // Only process write/modify events
+                    if matches!(event.kind, EventKind::Modify(_)) {
+                        should_reload = true;
+                        self.last_event_time = std::time::Instant::now();
                     }
-                } else {
-                    None
+                }
+                Ok(Err(e)) => {
+                    // File watcher error, log but continue
+                    eprintln!("Error watching config file: {e}");
+                }
+                Err(TryRecvError::Empty) => {
+                    // No more events
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    // Channel disconnected, watcher is dead
+                    eprintln!("Config watcher channel disconnected");
+                    return None;
                 }
             }
-            // No events or channel errors
-            _ => None,
+        }
+
+        // Debounce rapid file changes (e.g., from editors that write multiple times)
+        if should_reload {
+            // Wait to ensure file writing is complete
+            let debounce_time = Duration::from_millis(250);
+            let time_since_last_event = self.last_event_time.elapsed();
+
+            if time_since_last_event < debounce_time {
+                thread::sleep(debounce_time - time_since_last_event);
+            }
+
+            // Attempt to reload the config from the specific path being watched
+            match load_config_from_path(Some(&self.config_path)) {
+                Ok(config) => Some(Ok(config)),
+                Err(e) => Some(Err(Box::new(e))),
+            }
+        } else {
+            None
         }
     }
 
