@@ -4,6 +4,7 @@ use crate::conflict;
 use crate::core::SystemReport;
 use crate::engine;
 use crate::monitor;
+use log::{LevelFilter, debug, error, info, warn};
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -19,20 +20,23 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
         config.daemon.log_level
     };
 
-    log_message(
-        &effective_log_level,
-        LogLevel::Info,
-        "Starting superfreq daemon...",
-    );
+    // Get the appropriate level filter
+    let level_filter = match effective_log_level {
+        LogLevel::Error => LevelFilter::Error,
+        LogLevel::Warning => LevelFilter::Warn,
+        LogLevel::Info => LevelFilter::Info,
+        LogLevel::Debug => LevelFilter::Debug,
+    };
+
+    // Update the log level filter if needed, without re-initializing the logger
+    log::set_max_level(level_filter);
+
+    info!("Starting superfreq daemon...");
 
     // Check for conflicts with other power management services
     let conflicts = conflict::detect_conflicts();
     if conflicts.has_conflicts() {
-        log_message(
-            &effective_log_level,
-            LogLevel::Warning,
-            &conflicts.get_conflict_message(),
-        );
+        warn!("{}", conflicts.get_conflict_message());
     }
 
     // Create a flag that will be set to true when a signal is received
@@ -41,27 +45,19 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
 
     // Set up signal handlers
     ctrlc::set_handler(move || {
-        println!("Received shutdown signal, exiting...");
+        info!("Received shutdown signal, exiting...");
         r.store(false, Ordering::SeqCst);
     })
     .expect("Error setting Ctrl-C handler");
 
-    log_message(
-        &effective_log_level,
-        LogLevel::Info,
-        &format!(
-            "Daemon initialized with poll interval: {}s",
-            config.daemon.poll_interval_sec
-        ),
+    info!(
+        "Daemon initialized with poll interval: {}s",
+        config.daemon.poll_interval_sec
     );
 
     // Set up stats file if configured
     if let Some(stats_path) = &config.daemon.stats_file_path {
-        log_message(
-            &effective_log_level,
-            LogLevel::Info,
-            &format!("Stats will be written to: {stats_path}"),
-        );
+        info!("Stats will be written to: {stats_path}");
     }
 
     // Initialize config file watcher if a path is available
@@ -80,28 +76,16 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
     let mut config_watcher = if let Some(path) = config_file_path {
         match ConfigWatcher::new(&path) {
             Ok(watcher) => {
-                log_message(
-                    &effective_log_level,
-                    LogLevel::Info,
-                    &format!("Watching config file: {path}"),
-                );
+                info!("Watching config file: {path}");
                 Some(watcher)
             }
             Err(e) => {
-                log_message(
-                    &effective_log_level,
-                    LogLevel::Warning,
-                    &format!("Failed to initialize config file watcher: {e}"),
-                );
+                warn!("Failed to initialize config file watcher: {e}");
                 None
             }
         }
     } else {
-        log_message(
-            &effective_log_level,
-            LogLevel::Warning,
-            "No config file found to watch for changes.",
-        );
+        warn!("No config file found to watch for changes.");
         None
     };
 
@@ -119,11 +103,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
             if let Some(config_result) = watcher.check_for_changes() {
                 match config_result {
                     Ok(new_config) => {
-                        log_message(
-                            &effective_log_level,
-                            LogLevel::Info,
-                            "Config file changed, updating configuration",
-                        );
+                        info!("Config file changed, updating configuration");
                         config = new_config;
                         // Reset polling interval after config change
                         current_poll_interval = config.daemon.poll_interval_sec;
@@ -131,11 +111,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                         last_settings_change = Instant::now();
                     }
                     Err(e) => {
-                        log_message(
-                            &effective_log_level,
-                            LogLevel::Error,
-                            &format!("Error loading new configuration: {e}"),
-                        );
+                        error!("Error loading new configuration: {e}");
                         // Continue with existing config
                     }
                 }
@@ -144,11 +120,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
 
         match monitor::collect_system_report(&config) {
             Ok(report) => {
-                log_message(
-                    &effective_log_level,
-                    LogLevel::Debug,
-                    "Collected system report, applying settings...",
-                );
+                debug!("Collected system report, applying settings...");
 
                 // Determine current system state
                 let current_state = determine_system_state(&report);
@@ -156,40 +128,24 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                 // Update the stats file if configured
                 if let Some(stats_path) = &config.daemon.stats_file_path {
                     if let Err(e) = write_stats_file(stats_path, &report) {
-                        log_message(
-                            &effective_log_level,
-                            LogLevel::Error,
-                            &format!("Failed to write stats file: {e}"),
-                        );
+                        error!("Failed to write stats file: {e}");
                     }
                 }
 
                 match engine::determine_and_apply_settings(&report, &config, None) {
                     Ok(()) => {
-                        log_message(
-                            &effective_log_level,
-                            LogLevel::Debug,
-                            "Successfully applied system settings",
-                        );
+                        debug!("Successfully applied system settings");
 
                         // If system state changed or settings were applied differently, record the time
                         if current_state != last_system_state {
                             last_settings_change = Instant::now();
                             last_system_state = current_state.clone();
 
-                            log_message(
-                                &effective_log_level,
-                                LogLevel::Info,
-                                &format!("System state changed to: {current_state:?}"),
-                            );
+                            info!("System state changed to: {current_state:?}");
                         }
                     }
                     Err(e) => {
-                        log_message(
-                            &effective_log_level,
-                            LogLevel::Error,
-                            &format!("Error applying system settings: {e}"),
-                        );
+                        error!("Error applying system settings: {e}");
                     }
                 }
 
@@ -202,25 +158,13 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                         current_poll_interval =
                             (current_poll_interval * 2).min(config.daemon.max_poll_interval_sec);
 
-                        log_message(
-                            &effective_log_level,
-                            LogLevel::Debug,
-                            &format!(
-                                "Adaptive polling: increasing interval to {current_poll_interval}s"
-                            ),
-                        );
+                        debug!("Adaptive polling: increasing interval to {current_poll_interval}s");
                     } else if time_since_change < 10 {
                         // If we've had recent changes, decrease the interval (down to min)
                         current_poll_interval =
                             (current_poll_interval / 2).max(config.daemon.min_poll_interval_sec);
 
-                        log_message(
-                            &effective_log_level,
-                            LogLevel::Debug,
-                            &format!(
-                                "Adaptive polling: decreasing interval to {current_poll_interval}s"
-                            ),
-                        );
+                        debug!("Adaptive polling: decreasing interval to {current_poll_interval}s");
                     }
                 } else {
                     // If not adaptive, use the configured poll interval
@@ -236,19 +180,11 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                     current_poll_interval = (current_poll_interval * battery_multiplier)
                         .min(config.daemon.max_poll_interval_sec);
 
-                    log_message(
-                        &effective_log_level,
-                        LogLevel::Debug,
-                        "On battery power, increasing poll interval to save energy",
-                    );
+                    debug!("On battery power, increasing poll interval to save energy");
                 }
             }
             Err(e) => {
-                log_message(
-                    &effective_log_level,
-                    LogLevel::Error,
-                    &format!("Error collecting system report: {e}"),
-                );
+                error!("Error collecting system report: {e}");
             }
         }
 
@@ -257,39 +193,22 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
         let poll_duration = Duration::from_secs(current_poll_interval);
         if elapsed < poll_duration {
             let sleep_time = poll_duration - elapsed;
-            log_message(
-                &effective_log_level,
-                LogLevel::Debug,
-                &format!("Sleeping for {}s until next cycle", sleep_time.as_secs()),
-            );
+            debug!("Sleeping for {}s until next cycle", sleep_time.as_secs());
             std::thread::sleep(sleep_time);
         }
     }
 
-    log_message(&effective_log_level, LogLevel::Info, "Daemon stopped");
+    info!("Daemon stopped");
     Ok(())
 }
 
-/// Log a message based on the current log level
-fn log_message(effective_level: &LogLevel, msg_level: LogLevel, message: &str) {
-    // Only log messages at or above the effective log level
-    let should_log = match effective_level {
-        LogLevel::Error => matches!(msg_level, LogLevel::Error),
-        LogLevel::Warning => matches!(msg_level, LogLevel::Error | LogLevel::Warning),
-        LogLevel::Info => matches!(
-            msg_level,
-            LogLevel::Error | LogLevel::Warning | LogLevel::Info
-        ),
-        LogLevel::Debug => true,
-    };
-
-    if should_log {
-        match msg_level {
-            LogLevel::Error => eprintln!("ERROR: {message}"),
-            LogLevel::Warning => eprintln!("WARNING: {message}"),
-            LogLevel::Info => println!("INFO: {message}"),
-            LogLevel::Debug => println!("DEBUG: {message}"),
-        }
+/// Initialize the logger with the appropriate level
+const fn get_log_level_filter(log_level: LogLevel) -> LevelFilter {
+    match log_level {
+        LogLevel::Error => LevelFilter::Error,
+        LogLevel::Warning => LevelFilter::Warn,
+        LogLevel::Info => LevelFilter::Info,
+        LogLevel::Debug => LevelFilter::Debug,
     }
 }
 

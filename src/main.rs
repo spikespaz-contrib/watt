@@ -12,6 +12,9 @@ use crate::config::AppConfig;
 use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
 use clap::Parser;
+use env_logger::Builder;
+use log::{debug, error, info};
+use std::sync::Once;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -77,6 +80,9 @@ enum Commands {
 }
 
 fn main() {
+    // Initialize logger once for the entire application
+    init_logger();
+
     let cli = Cli::parse();
 
     // Load configuration first, as it might be needed by the monitor module
@@ -84,7 +90,7 @@ fn main() {
     let config = match config::load_config() {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("Error loading configuration: {e}. Using default values.");
+            error!("Error loading configuration: {e}. Using default values.");
             // Proceed with default config if loading fails, as per previous steps
             AppConfig::default()
         }
@@ -100,12 +106,12 @@ fn main() {
                     let total_width = title_len + 8; // 8 is for padding (4 on each side)
                     let separator = "═".repeat(total_width);
 
-                    println!("\n╔{}╗", separator);
+                    println!("\n╔{separator}╗");
 
                     // Calculate centering
-                    println!("║    {}    ║", title);
+                    println!("║    {title}    ║");
 
-                    println!("╚{}╝", separator);
+                    println!("╚{separator}╝");
                 };
 
                 format_section("System Information");
@@ -164,7 +170,7 @@ fn main() {
                     "CPU Temperature:    {}",
                     report.cpu_global.average_temperature_celsius.map_or_else(
                         || "N/A (No sensor detected)".to_string(),
-                        |t| format!("{:.1}°C", t)
+                        |t| format!("{t:.1}°C")
                     )
                 );
 
@@ -205,9 +211,9 @@ fn main() {
                             let max_freq = core_info.max_frequency_mhz.unwrap_or(0);
                             if freq > max_freq && max_freq > 0 {
                                 // Special format for boosted frequencies
-                                format!("{}*", freq)
+                                format!("{freq}*")
                             } else {
-                                format!("{}", freq)
+                                format!("{freq}")
                             }
                         }
                         None => "N/A".to_string(),
@@ -234,13 +240,13 @@ fn main() {
                             "{}%",
                             core_info
                                 .usage_percent
-                                .map_or_else(|| "N/A".to_string(), |f| format!("{:.1}", f))
+                                .map_or_else(|| "N/A".to_string(), |f| format!("{f:.1}"))
                         ),
                         format!(
                             "{}°C",
                             core_info
                                 .temperature_celsius
-                                .map_or_else(|| "N/A".to_string(), |f| format!("{:.1}", f))
+                                .map_or_else(|| "N/A".to_string(), |f| format!("{f:.1}"))
                         ),
                         width = max_core_id_len
                     );
@@ -355,24 +361,24 @@ fn main() {
         Some(Commands::Daemon { verbose }) => daemon::run_daemon(config, verbose),
         Some(Commands::Debug) => cli::debug::run_debug(&config),
         None => {
-            println!("Welcome to superfreq! Use --help for commands.");
-            println!("Current effective configuration: {config:?}");
+            info!("Welcome to superfreq! Use --help for commands.");
+            debug!("Current effective configuration: {config:?}");
             Ok(())
         }
     };
 
     if let Err(e) = command_result {
-        eprintln!("Error executing command: {e}");
+        error!("Error executing command: {e}");
         if let Some(source) = e.source() {
-            eprintln!("Caused by: {source}");
+            error!("Caused by: {source}");
         }
-        // TODO: Consider specific error handling for PermissionDenied from cpu here
-        // For example, check if e.downcast_ref::<cpu::ControlError>() matches PermissionDenied
+        // TODO: Consider specific error handling for PermissionDenied from the cpu module here.
+        // For example, check if `e.downcast_ref::<cpu::ControlError>()` matches `PermissionDenied`
         // and print a more specific message like "Try running with sudo."
         // We'll revisit this in the future once CPU logic is more stable.
         if let Some(control_error) = e.downcast_ref::<ControlError>() {
             if matches!(control_error, ControlError::PermissionDenied(_)) {
-                eprintln!(
+                error!(
                     "Hint: This operation may require administrator privileges (e.g., run with sudo)."
                 );
             }
@@ -380,4 +386,21 @@ fn main() {
 
         std::process::exit(1);
     }
+}
+
+/// Initialize the logger for the entire application
+static LOGGER_INIT: Once = Once::new();
+fn init_logger() {
+    LOGGER_INIT.call_once(|| {
+        // Set default log level based on environment or default to Info
+        let env_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+
+        Builder::new()
+            .parse_filters(&env_log)
+            .format_timestamp(None)
+            .format_module_path(false)
+            .init();
+
+        debug!("Logger initialized with RUST_LOG={env_log}");
+    });
 }
