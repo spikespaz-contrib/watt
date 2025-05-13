@@ -1,11 +1,6 @@
 use crate::core::TurboSetting;
-use crate::monitor::Result as MonitorResult;
 use core::str;
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-    string::ToString,
-};
+use std::{fs, io, path::Path, string::ToString};
 
 #[derive(Debug)]
 pub enum ControlError {
@@ -18,10 +13,10 @@ pub enum ControlError {
 }
 
 impl From<io::Error> for ControlError {
-    fn from(err: io::Error) -> ControlError {
+    fn from(err: io::Error) -> Self {
         match err.kind() {
-            io::ErrorKind::PermissionDenied => ControlError::PermissionDenied(err.to_string()),
-            _ => ControlError::Io(err),
+            io::ErrorKind::PermissionDenied => Self::PermissionDenied(err.to_string()),
+            _ => Self::Io(err),
         }
     }
 }
@@ -29,18 +24,17 @@ impl From<io::Error> for ControlError {
 impl std::fmt::Display for ControlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ControlError::Io(e) => write!(f, "I/O error: {}", e),
-            ControlError::WriteError(s) => write!(f, "Failed to write to sysfs path: {}", s),
-            ControlError::InvalidValueError(s) => write!(f, "Invalid value for setting: {}", s),
-            ControlError::NotSupported(s) => write!(f, "Control action not supported: {}", s),
-            ControlError::PermissionDenied(s) => {
-                write!(f, "Permission denied: {}. Try running with sudo.", s)
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::WriteError(s) => write!(f, "Failed to write to sysfs path: {s}"),
+            Self::InvalidValueError(s) => write!(f, "Invalid value for setting: {s}"),
+            Self::NotSupported(s) => write!(f, "Control action not supported: {s}"),
+            Self::PermissionDenied(s) => {
+                write!(f, "Permission denied: {s}. Try running with sudo.")
             }
-            ControlError::InvalidProfile(s) => {
+            Self::InvalidProfile(s) => {
                 write!(
                     f,
-                    "Invalid platform control profile {} supplied, please provide a valid one.",
-                    s
+                    "Invalid platform control profile {s} supplied, please provide a valid one."
                 )
             }
         }
@@ -75,27 +69,41 @@ where
     // Let's use a similar discovery to monitor's get_logical_core_count
     let mut cores_to_act_on = Vec::new();
     let path = Path::new("/sys/devices/system/cpu");
-    if path.exists() {
-        if let Ok(entries) = fs::read_dir(path) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                if let Some(name_str) = name.to_str() {
-                    if name_str.starts_with("cpu")
-                        && name_str.len() > 3
-                        && name_str[3..].chars().all(char::is_numeric)
-                    {
-                        if entry.path().join("cpufreq").exists() {
-                            if let Ok(core_id) = name_str[3..].parse::<u32>() {
-                                cores_to_act_on.push(core_id);
-                            }
-                        }
-                    }
-                }
-            }
+    if !path.exists() {
+        return Err(ControlError::NotSupported(format!(
+            "No logical cores found at {}.",
+            path.display()
+        )));
+    }
+
+    let entries = fs::read_dir(path)
+        .map_err(|_| {
+            ControlError::PermissionDenied(format!("Cannot read contents of {}.", path.display()))
+        })?
+        .flatten();
+
+    for entry in entries {
+        let entry_file_name = entry.file_name();
+        let Some(name) = entry_file_name.to_str() else {
+            continue;
+        };
+
+        // Skip non-CPU directories (e.g., cpuidle, cpufreq)
+        if !name.starts_with("cpu") || name.len() <= 3 || !name[3..].chars().all(char::is_numeric) {
+            continue;
+        }
+
+        if !entry.path().join("cpufreq").exists() {
+            continue;
+        }
+
+        if let Ok(core_id) = name[3..].parse::<u32>() {
+            cores_to_act_on.push(core_id);
         }
     }
     if cores_to_act_on.is_empty() {
         // Fallback if sysfs iteration above fails to find any cpufreq cores
+        #[allow(clippy::cast_possible_truncation)]
         let num_cores = num_cpus::get() as u32;
         for core_id in 0..num_cores {
             cores_to_act_on.push(core_id);
@@ -110,7 +118,7 @@ where
 
 pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
     let action = |id: u32| {
-        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor", id);
+        let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_governor");
         if Path::new(&path).exists() {
             write_sysfs_value(&path, governor)
         } else {
@@ -120,11 +128,7 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
         }
     };
 
-    if let Some(id) = core_id {
-        action(id)
-    } else {
-        for_each_cpu_core(action)
-    }
+    core_id.map_or_else(|| for_each_cpu_core(action), action)
 }
 
 pub fn set_turbo(setting: TurboSetting) -> Result<()> {
@@ -155,76 +159,54 @@ pub fn set_turbo(setting: TurboSetting) -> Result<()> {
 
 pub fn set_epp(epp: &str, core_id: Option<u32>) -> Result<()> {
     let action = |id: u32| {
-        let path = format!(
-            "/sys/devices/system/cpu/cpu{}/cpufreq/energy_performance_preference",
-            id
-        );
+        let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/energy_performance_preference");
         if Path::new(&path).exists() {
             write_sysfs_value(&path, epp)
         } else {
             Ok(())
         }
     };
-    if let Some(id) = core_id {
-        action(id)
-    } else {
-        for_each_cpu_core(action)
-    }
+    core_id.map_or_else(|| for_each_cpu_core(action), action)
 }
 
 pub fn set_epb(epb: &str, core_id: Option<u32>) -> Result<()> {
     // EPB is often an integer 0-15. Ensure `epb` string is valid if parsing.
     // For now, writing it directly as a string.
     let action = |id: u32| {
-        let path = format!(
-            "/sys/devices/system/cpu/cpu{}/cpufreq/energy_performance_bias",
-            id
-        );
+        let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/energy_performance_bias");
         if Path::new(&path).exists() {
             write_sysfs_value(&path, epb)
         } else {
             Ok(())
         }
     };
-    if let Some(id) = core_id {
-        action(id)
-    } else {
-        for_each_cpu_core(action)
-    }
+    core_id.map_or_else(|| for_each_cpu_core(action), action)
 }
 
 pub fn set_min_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
     let freq_khz_str = (freq_mhz * 1000).to_string();
     let action = |id: u32| {
-        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_min_freq", id);
+        let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_min_freq");
         if Path::new(&path).exists() {
             write_sysfs_value(&path, &freq_khz_str)
         } else {
             Ok(())
         }
     };
-    if let Some(id) = core_id {
-        action(id)
-    } else {
-        for_each_cpu_core(action)
-    }
+    core_id.map_or_else(|| for_each_cpu_core(action), action)
 }
 
 pub fn set_max_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
     let freq_khz_str = (freq_mhz * 1000).to_string();
     let action = |id: u32| {
-        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_max_freq", id);
+        let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_max_freq");
         if Path::new(&path).exists() {
             write_sysfs_value(&path, &freq_khz_str)
         } else {
             Ok(())
         }
     };
-    if let Some(id) = core_id {
-        action(id)
-    } else {
-        for_each_cpu_core(action)
-    }
+    core_id.map_or_else(|| for_each_cpu_core(action), action)
 }
 
 /// Sets the platform profile.
