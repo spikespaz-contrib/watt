@@ -1,22 +1,26 @@
 {
-  description = "Superfreq";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs?ref=nixos-unstable";
 
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    systems.url = "github:nix-systems/default-linux";
-  };
-
-  outputs = inputs @ {
+  outputs = {
     self,
     nixpkgs,
-    systems,
-  }: let
-    inherit (nixpkgs) lib;
-    eachSystem = lib.genAttrs (import inputs.systems);
-    pkgsFor = eachSystem (system: nixpkgs.legacyPackages.${system});
+    ...
+  } @ inputs: let
+    forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux"];
+    pkgsForEach = nixpkgs.legacyPackages;
   in {
-    devShells = eachSystem (system: {
-      default = pkgsFor.${system}.callPackage ./nix/shell.nix {};
+    packages = forAllSystems (system: {
+      superfreq = pkgsForEach.${system}.callPackage ./nix/package.nix {};
+      default = self.packages.${system}.superfreq;
     });
+
+    devShells = forAllSystems (system: {
+      default = pkgsForEach.${system}.callPackage ./nix/shell.nix {};
+    });
+
+    nixosModules = {
+      superfreq = import ./nix/module.nix inputs;
+      default = self.nixosModules.superfreq;
+    };
   };
 }
