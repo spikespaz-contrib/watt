@@ -5,9 +5,11 @@ mod cpu;
 mod daemon;
 mod engine;
 mod monitor;
+mod util;
 
 use crate::config::AppConfig;
 use crate::core::{GovernorOverrideMode, TurboSetting};
+use crate::util::error::ControlError;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -216,8 +218,8 @@ fn main() {
         // For example, check if e.downcast_ref::<cpu::ControlError>() matches PermissionDenied
         // and print a more specific message like "Try running with sudo."
         // We'll revisit this in the future once CPU logic is more stable.
-        if let Some(control_error) = e.downcast_ref::<cpu::ControlError>() {
-            if matches!(control_error, cpu::ControlError::PermissionDenied(_)) {
+        if let Some(control_error) = e.downcast_ref::<ControlError>() {
+            if matches!(control_error, ControlError::PermissionDenied(_)) {
                 eprintln!(
                     "Hint: This operation may require administrator privileges (e.g., run with sudo)."
                 );
