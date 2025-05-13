@@ -1,0 +1,233 @@
+use crate::core::TurboSetting;
+use crate::monitor::Result as MonitorResult;
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug)]
+pub enum ControlError {
+    Io(io::Error),
+    WriteError(String),
+    InvalidValueError(String),
+    NotSupported(String),
+    PermissionDenied(String),
+}
+
+impl From<io::Error> for ControlError {
+    fn from(err: io::Error) -> ControlError {
+        match err.kind() {
+            io::ErrorKind::PermissionDenied => ControlError::PermissionDenied(err.to_string()),
+            _ => ControlError::Io(err),
+        }
+    }
+}
+
+impl std::fmt::Display for ControlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ControlError::Io(e) => write!(f, "I/O error: {}", e),
+            ControlError::WriteError(s) => write!(f, "Failed to write to sysfs path: {}", s),
+            ControlError::InvalidValueError(s) => write!(f, "Invalid value for setting: {}", s),
+            ControlError::NotSupported(s) => write!(f, "Control action not supported: {}", s),
+            ControlError::PermissionDenied(s) => {
+                write!(f, "Permission denied: {}. Try running with sudo.", s)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ControlError {}
+
+pub type Result<T, E = ControlError> = std::result::Result<T, E>;
+
+// Write a value to a sysfs file
+fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
+    let p = path.as_ref();
+    fs::write(p, value).map_err(|e| {
+        let error_msg = format!("Path: {:?}, Value: '{}', Error: {}", p.display(), value, e);
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            ControlError::PermissionDenied(error_msg)
+        } else {
+            ControlError::WriteError(error_msg)
+        }
+    })
+}
+
+fn for_each_cpu_core<F>(mut action: F) -> Result<()>
+where
+    F: FnMut(u32) -> Result<()>,
+{
+    // Using num_cpus::get() for a reliable count of logical cores accessible.
+    // The monitor module's get_logical_core_count might be more specific to cpufreq-capable cores,
+    // but for applying settings, we might want to iterate over all reported by OS.
+    // However, settings usually apply to cores with cpufreq.
+    // Let's use a similar discovery to monitor's get_logical_core_count
+    let mut cores_to_act_on = Vec::new();
+    let path = Path::new("/sys/devices/system/cpu");
+    if path.exists() {
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if let Some(name_str) = name.to_str() {
+                    if name_str.starts_with("cpu")
+                        && name_str.len() > 3
+                        && name_str[3..].chars().all(char::is_numeric)
+                    {
+                        if entry.path().join("cpufreq").exists() {
+                            if let Ok(core_id) = name_str[3..].parse::<u32>() {
+                                cores_to_act_on.push(core_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if cores_to_act_on.is_empty() {
+        // Fallback if sysfs iteration above fails to find any cpufreq cores
+        let num_cores = num_cpus::get() as u32;
+        for core_id in 0..num_cores {
+            cores_to_act_on.push(core_id);
+        }
+    }
+
+    for core_id in cores_to_act_on {
+        action(core_id)?;
+    }
+    Ok(())
+}
+
+pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
+    let action = |id: u32| {
+        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor", id);
+        if Path::new(&path).exists() {
+            write_sysfs_value(&path, governor)
+        } else {
+            // Silently ignore if the path doesn't exist for a specific core,
+            // as not all cores might have cpufreq (e.g. offline cores)
+            Ok(())
+        }
+    };
+
+    if let Some(id) = core_id {
+        action(id)
+    } else {
+        for_each_cpu_core(action)
+    }
+}
+
+pub fn set_turbo(setting: TurboSetting) -> Result<()> {
+    let value_pstate = match setting {
+        TurboSetting::Always => "0", // no_turbo = 0 means turbo is enabled
+        TurboSetting::Never => "1",  // no_turbo = 1 means turbo is disabled
+        TurboSetting::Auto => return Err(ControlError::InvalidValueError("Turbo Auto cannot be directly set via intel_pstate/no_turbo or cpufreq/boost. System default.".to_string())),
+    };
+    let value_boost = match setting {
+        TurboSetting::Always => "1", // boost = 1 means turbo is enabled
+        TurboSetting::Never => "0",  // boost = 0 means turbo is disabled
+         TurboSetting::Auto => return Err(ControlError::InvalidValueError("Turbo Auto cannot be directly set via intel_pstate/no_turbo or cpufreq/boost. System default.".to_string())),
+    };
+
+    let pstate_path = "/sys/devices/system/cpu/intel_pstate/no_turbo";
+    let boost_path = "/sys/devices/system/cpu/cpufreq/boost";
+
+    if Path::new(pstate_path).exists() {
+        write_sysfs_value(pstate_path, value_pstate)
+    } else if Path::new(boost_path).exists() {
+        write_sysfs_value(boost_path, value_boost)
+    } else {
+        Err(ControlError::NotSupported(
+            "Neither intel_pstate/no_turbo nor cpufreq/boost found.".to_string(),
+        ))
+    }
+}
+
+pub fn set_epp(epp: &str, core_id: Option<u32>) -> Result<()> {
+    let action = |id: u32| {
+        let path = format!(
+            "/sys/devices/system/cpu/cpu{}/cpufreq/energy_performance_preference",
+            id
+        );
+        if Path::new(&path).exists() {
+            write_sysfs_value(&path, epp)
+        } else {
+            Ok(())
+        }
+    };
+    if let Some(id) = core_id {
+        action(id)
+    } else {
+        for_each_cpu_core(action)
+    }
+}
+
+pub fn set_epb(epb: &str, core_id: Option<u32>) -> Result<()> {
+    // EPB is often an integer 0-15. Ensure `epb` string is valid if parsing.
+    // For now, writing it directly as a string.
+    let action = |id: u32| {
+        let path = format!(
+            "/sys/devices/system/cpu/cpu{}/cpufreq/energy_performance_bias",
+            id
+        );
+        if Path::new(&path).exists() {
+            write_sysfs_value(&path, epb)
+        } else {
+            Ok(())
+        }
+    };
+    if let Some(id) = core_id {
+        action(id)
+    } else {
+        for_each_cpu_core(action)
+    }
+}
+
+pub fn set_min_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
+    let freq_khz_str = (freq_mhz * 1000).to_string();
+    let action = |id: u32| {
+        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_min_freq", id);
+        if Path::new(&path).exists() {
+            write_sysfs_value(&path, &freq_khz_str)
+        } else {
+            Ok(())
+        }
+    };
+    if let Some(id) = core_id {
+        action(id)
+    } else {
+        for_each_cpu_core(action)
+    }
+}
+
+pub fn set_max_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
+    let freq_khz_str = (freq_mhz * 1000).to_string();
+    let action = |id: u32| {
+        let path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_max_freq", id);
+        if Path::new(&path).exists() {
+            write_sysfs_value(&path, &freq_khz_str)
+        } else {
+            Ok(())
+        }
+    };
+    if let Some(id) = core_id {
+        action(id)
+    } else {
+        for_each_cpu_core(action)
+    }
+}
+
+pub fn set_platform_profile(profile: &str) -> Result<()> {
+    let path = "/sys/firmware/acpi/platform_profile";
+    if Path::new(path).exists() {
+        // Before writing, it'd be nice to check if the profile is in available_profiles
+        // Reading available profiles: /sys/firmware/acpi/platform_profile_choices
+        // TODO: Validate profile against available profiles here for a cleaner impl.
+        write_sysfs_value(path, profile)
+    } else {
+        Err(ControlError::NotSupported(
+            "Platform profile control not found at /sys/firmware/acpi/platform_profile."
+                .to_string(),
+        ))
+    }
+}
