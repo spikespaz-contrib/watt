@@ -246,7 +246,7 @@ fn check_and_print_sysfs_path(path: &str, description: &str) {
 fn is_systemd_service_active(service_name: &str) -> Result<bool, Box<dyn Error>> {
     let output = Command::new("systemctl")
         .arg("is-active")
-        .arg(format!("{}.service", service_name))
+        .arg(format!("{service_name}.service"))
         .stdout(Stdio::piped()) // capture stdout instead of letting it print
         .stderr(Stdio::null()) // redirect stderr to null
         .output()?;
