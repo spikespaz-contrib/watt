@@ -1,8 +1,8 @@
 use crate::config::{AppConfig, ProfileConfig};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
-use crate::util::error::EngineError;
-use log::{debug, info};
+use crate::util::error::{ControlError, EngineError};
+use log::{debug, info, warn};
 
 /// Determines the appropriate CPU profile based on power status or forced mode,
 /// and applies the settings using functions from the `cpu` module.
@@ -17,6 +17,18 @@ pub fn determine_and_apply_settings(
             "Governor override is active: '{}'. Setting governor.",
             override_governor.trim()
         );
+
+        // Check if the governor is available before applying
+        let available_governors = report.cpu_global.available_governors.clone();
+        if !available_governors.contains(&override_governor.trim().to_string()) {
+            return Err(EngineError::ConfigurationError(format!(
+                "Governor '{}' from override file is not available on this system. Available governors: {}",
+                override_governor.trim(),
+                available_governors.join(", ")
+            )));
+        }
+
+        // Apply the override governor setting
         cpu::set_governor(override_governor.trim(), None)?;
     }
 
@@ -52,8 +64,16 @@ pub fn determine_and_apply_settings(
 
     // Apply settings from selected_profile_config
     if let Some(governor) = &selected_profile_config.governor {
-        info!("Setting governor to '{governor}'");
-        cpu::set_governor(governor, None)?;
+        // Check if the governor is available before trying to set it
+        if report.cpu_global.available_governors.contains(governor) {
+            info!("Setting governor to '{governor}'");
+            cpu::set_governor(governor, None)?;
+        } else {
+            let available = report.cpu_global.available_governors.join(", ");
+            warn!(
+                "Configured governor '{governor}' is not available on this system. Available governors: {available}. Skipping."
+            );
+        }
     }
 
     if let Some(turbo_setting) = selected_profile_config.turbo {
@@ -63,33 +83,111 @@ pub fn determine_and_apply_settings(
                 debug!("Managing turbo in auto mode based on system conditions");
                 manage_auto_turbo(report, selected_profile_config)?;
             }
-            _ => cpu::set_turbo(turbo_setting)?,
+            _ => {
+                // Try to set turbo, but handle the error gracefully
+                if let Err(e) = cpu::set_turbo(turbo_setting) {
+                    // If the feature is not supported, just log a warning instead of failing
+                    if matches!(e, ControlError::NotSupported(_)) {
+                        warn!(
+                            "Turbo boost control is not supported on this system. Skipping turbo setting."
+                        );
+                    } else {
+                        // For other errors, propagate them
+                        return Err(EngineError::ControlError(e));
+                    }
+                }
+            }
         }
     }
 
     if let Some(epp) = &selected_profile_config.epp {
         info!("Setting EPP to '{epp}'");
-        cpu::set_epp(epp, None)?;
+        // Try to set EPP, but handle the error gracefully
+        if let Err(e) = cpu::set_epp(epp, None) {
+            // If the feature is not supported, just log a warning instead of failing
+            if matches!(e, ControlError::NotSupported(_))
+                || e.to_string().contains("No such file or directory")
+            {
+                warn!("EPP setting is not supported on this system. Skipping EPP configuration.");
+            } else {
+                return Err(EngineError::ControlError(e));
+            }
+        }
     }
 
     if let Some(epb) = &selected_profile_config.epb {
         info!("Setting EPB to '{epb}'");
-        cpu::set_epb(epb, None)?;
+        // Try to set EPB, but handle the error gracefully
+        if let Err(e) = cpu::set_epb(epb, None) {
+            // If the feature is not supported, just log a warning instead of failing
+            if matches!(e, ControlError::NotSupported(_))
+                || e.to_string().contains("No such file or directory")
+            {
+                warn!("EPB setting is not supported on this system. Skipping EPB configuration.");
+            } else {
+                return Err(EngineError::ControlError(e));
+            }
+        }
     }
 
     if let Some(min_freq) = selected_profile_config.min_freq_mhz {
         info!("Setting min frequency to '{min_freq} MHz'");
-        cpu::set_min_frequency(min_freq, None)?;
+        if let Err(e) = cpu::set_min_frequency(min_freq, None) {
+            // If the feature is not supported, just log a warning instead of failing
+            if matches!(e, ControlError::NotSupported(_))
+                || e.to_string().contains("No such file or directory")
+            {
+                warn!(
+                    "CPU frequency control is not supported on this system. Skipping min frequency setting."
+                );
+            } else {
+                return Err(EngineError::ControlError(e));
+            }
+        }
     }
 
     if let Some(max_freq) = selected_profile_config.max_freq_mhz {
         info!("Setting max frequency to '{max_freq} MHz'");
-        cpu::set_max_frequency(max_freq, None)?;
+        if let Err(e) = cpu::set_max_frequency(max_freq, None) {
+            // If the feature is not supported, just log a warning instead of failing
+            if matches!(e, ControlError::NotSupported(_))
+                || e.to_string().contains("No such file or directory")
+            {
+                warn!(
+                    "CPU frequency control is not supported on this system. Skipping max frequency setting."
+                );
+            } else {
+                return Err(EngineError::ControlError(e));
+            }
+        }
     }
 
     if let Some(profile) = &selected_profile_config.platform_profile {
         info!("Setting platform profile to '{profile}'");
-        cpu::set_platform_profile(profile)?;
+        // Try to get available platform profiles first to validate
+        match cpu::get_platform_profiles() {
+            Ok(available_profiles) => {
+                if available_profiles.contains(profile) {
+                    cpu::set_platform_profile(profile)?;
+                } else {
+                    warn!(
+                        "Platform profile '{}' is not available. Available profiles: {}. Skipping.",
+                        profile,
+                        available_profiles.join(", ")
+                    );
+                }
+            }
+            Err(e) => {
+                // If platform profiles are not supported, log a warning and continue
+                if matches!(e, ControlError::NotSupported(_)) {
+                    warn!(
+                        "Platform profile control is not supported on this system. Skipping profile setting."
+                    );
+                } else {
+                    return Err(EngineError::ControlError(e));
+                }
+            }
+        }
     }
 
     debug!("Profile settings applied successfully.");

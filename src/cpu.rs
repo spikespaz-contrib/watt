@@ -79,6 +79,17 @@ where
 }
 
 pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
+    // First, check if the requested governor is available on the system
+    let available_governors = get_available_governors()?;
+
+    if !available_governors.contains(&governor.to_string()) {
+        return Err(ControlError::InvalidGovernor(format!(
+            "Governor '{}' is not available. Available governors: {}",
+            governor,
+            available_governors.join(", ")
+        )));
+    }
+
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_governor");
         if Path::new(&path).exists() {
@@ -91,6 +102,39 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
     };
 
     core_id.map_or_else(|| for_each_cpu_core(action), action)
+}
+
+/// Retrieves the list of available CPU governors on the system
+pub fn get_available_governors() -> Result<Vec<String>> {
+    // Check cpu0 for available governors
+    let path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors";
+    if !Path::new(path).exists() {
+        return Err(ControlError::NotSupported(
+            "Could not determine available governors".to_string(),
+        ));
+    }
+
+    let content = fs::read_to_string(path).map_err(|e| {
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            ControlError::PermissionDenied(format!("Permission denied reading from {path}"))
+        } else {
+            ControlError::ReadError(format!("Failed to read from {path}: {e}"))
+        }
+    })?;
+
+    // Parse the space-separated list of governors
+    let governors = content
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect::<Vec<String>>();
+
+    if governors.is_empty() {
+        return Err(ControlError::ParseError(
+            "No available governors found".to_string(),
+        ));
+    }
+
+    Ok(governors)
 }
 
 pub fn set_turbo(setting: TurboSetting) -> Result<()> {
