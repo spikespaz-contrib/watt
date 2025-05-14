@@ -46,7 +46,7 @@ pub fn load_config_from_path(specific_path: Option<&str>) -> Result<AppConfig, C
     }
 
     // System-wide paths
-    config_paths.push(PathBuf::from("/etc/superfreq/config.toml"));
+    config_paths.push(PathBuf::from("/etc/xdg/superfreq/config.toml"));
     config_paths.push(PathBuf::from("/etc/superfreq.toml"));
 
     for path in config_paths {

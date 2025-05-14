@@ -115,7 +115,7 @@ sudo superfreq set-max-freq 2800 --core-id 1
 
 Superfreq uses TOML configuration files. Default locations:
 
-- `/etc/superfreq/config.toml`
+- `/etc/xdg/superfreq/config.toml`
 - `/etc/superfreq.toml`
 
 You can also specify a custom path by setting the `SUPERFREQ_CONFIG` environment
