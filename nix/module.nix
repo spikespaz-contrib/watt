@@ -55,7 +55,7 @@ in {
         '';
       }
       {
-        assertion = !config.programs.auto-cpufreq.enable;
+        assertion = !config.services.auto-cpufreq.enable;
         message = ''
           You have set programs.auto-cpufreq.enable = true;
           which conflicts with Superfreq.
