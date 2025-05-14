@@ -274,7 +274,7 @@ const GOVERNOR_OVERRIDE_PATH: &str = "/etc/superfreq/governor_override";
 /// Force a specific CPU governor or reset to automatic mode
 pub fn force_governor(mode: GovernorOverrideMode) -> Result<()> {
     // Create directory if it doesn't exist
-    let dir_path = Path::new("/etc/superfreq");
+    let dir_path = Path::new("/etc/xdg/superfreq");
     if !dir_path.exists() {
         fs::create_dir_all(dir_path).map_err(|e| {
             if e.kind() == io::ErrorKind::PermissionDenied {
