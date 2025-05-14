@@ -1,6 +1,7 @@
 use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
 use core::str;
+use std::path::PathBuf;
 use std::{fs, io, path::Path, string::ToString};
 
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
@@ -8,12 +9,15 @@ pub type Result<T, E = ControlError> = std::result::Result<T, E>;
 // Write a value to a sysfs file
 fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
     let p = path.as_ref();
+
     fs::write(p, value).map_err(|e| {
         let error_msg = format!("Path: {:?}, Value: '{}', Error: {}", p.display(), value, e);
-        if e.kind() == io::ErrorKind::PermissionDenied {
-            ControlError::PermissionDenied(error_msg)
-        } else {
-            ControlError::WriteError(error_msg)
+        match e.kind() {
+            io::ErrorKind::PermissionDenied => ControlError::PermissionDenied(error_msg),
+            io::ErrorKind::NotFound => {
+                ControlError::PathMissing(format!("Path '{}' does not exist", p.display()))
+            }
+            _ => ControlError::WriteError(error_msg),
         }
     })
 }
@@ -82,7 +86,10 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
     // First, check if the requested governor is available on the system
     let available_governors = get_available_governors()?;
 
-    if !available_governors.contains(&governor.to_string()) {
+    if !available_governors
+        .iter()
+        .any(|g| g.eq_ignore_ascii_case(governor))
+    {
         return Err(ControlError::InvalidGovernor(format!(
             "Governor '{}' is not available. Available governors: {}",
             governor,
@@ -106,19 +113,35 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
 
 /// Retrieves the list of available CPU governors on the system
 pub fn get_available_governors() -> Result<Vec<String>> {
-    // Check cpu0 for available governors
-    let path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors";
-    if !Path::new(path).exists() {
+    // Prefer cpu0, fall back to first cpu with cpufreq
+    let mut governor_path =
+        PathBuf::from("/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors");
+    if !governor_path.exists() {
+        let core_count = get_logical_core_count()?;
+        let candidate = (0..core_count)
+            .map(|i| format!("/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_available_governors"))
+            .find(|path| Path::new(path).exists());
+        if let Some(path) = candidate {
+            governor_path = path.into();
+        }
+    }
+    if !governor_path.exists() {
         return Err(ControlError::NotSupported(
             "Could not determine available governors".to_string(),
         ));
     }
 
-    let content = fs::read_to_string(path).map_err(|e| {
+    let content = fs::read_to_string(&governor_path).map_err(|e| {
         if e.kind() == io::ErrorKind::PermissionDenied {
-            ControlError::PermissionDenied(format!("Permission denied reading from {path}"))
+            ControlError::PermissionDenied(format!(
+                "Permission denied reading from {}",
+                governor_path.display()
+            ))
         } else {
-            ControlError::ReadError(format!("Failed to read from {path}: {e}"))
+            ControlError::ReadError(format!(
+                "Failed to read from {}: {e}",
+                governor_path.display()
+            ))
         }
     })?;
 

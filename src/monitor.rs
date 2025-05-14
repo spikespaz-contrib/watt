@@ -408,14 +408,15 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
     let mut cpufreq_base_path_buf = PathBuf::from("/sys/devices/system/cpu/cpu0/cpufreq/");
 
     if !cpufreq_base_path_buf.exists() {
-        // Fallback: find first available CPU with cpufreq
-        for i in 1..=get_logical_core_count().unwrap_or(1) {
-            let test_path = format!("/sys/devices/system/cpu/cpu{}/cpufreq/", i - 1);
-            let test_path_buf = PathBuf::from(&test_path);
-            if test_path_buf.exists() {
-                cpufreq_base_path_buf = test_path_buf;
-                break;
-            }
+        let core_count = get_logical_core_count().unwrap_or_else(|e| {
+            eprintln!("Warning: {e}");
+            0
+        });
+        let path = (0..core_count)
+            .map(|i| PathBuf::from(format!("/sys/devices/system/cpu/cpu{i}/cpufreq/")))
+            .find(|path| path.exists());
+        if let Some(test_path_buf) = path {
+            cpufreq_base_path_buf = test_path_buf;
         }
     }
 
