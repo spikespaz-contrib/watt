@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Represents detected conflicts with other power management services
 #[derive(Debug)]
@@ -62,6 +62,8 @@ fn systemctl_exists() -> bool {
     Command::new("sh")
         .arg("-c")
         .arg("command -v systemctl")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
 }
@@ -78,6 +80,8 @@ fn is_service_active(service: &str) -> bool {
         .arg("--quiet")
         .arg("is-active")
         .arg(service)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
 }
@@ -118,6 +122,8 @@ pub fn detect_conflicts() -> ConflictDetection {
         && Command::new("sh")
             .arg("-c")
             .arg("tlp-stat -s 2>/dev/null | grep -q 'TLP power save = enabled'")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
     {

@@ -4,6 +4,8 @@ use crate::cpu;
 use crate::monitor;
 use std::error::Error;
 use std::fs;
+use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime};
 
 /// Prints comprehensive debug information about the system
 pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
@@ -11,8 +13,27 @@ pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Current date and time
-    let now = std::time::SystemTime::now();
-    println!("Timestamp: {now:?}");
+    let now = SystemTime::now();
+    let formatted_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    println!("Timestamp: {formatted_time}");
+
+    // Kernel information
+    if let Ok(kernel_info) = get_kernel_info() {
+        println!("Kernel Version: {kernel_info}");
+    } else {
+        println!("Kernel Version: Unable to determine");
+    }
+
+    // System uptime
+    if let Ok(uptime) = get_system_uptime() {
+        println!(
+            "System Uptime: {} hours, {} minutes",
+            uptime.as_secs() / 3600,
+            (uptime.as_secs() % 3600) / 60
+        );
+    } else {
+        println!("System Uptime: Unable to determine");
+    }
 
     // Get system information and conflicts
     match monitor::collect_system_report(config) {
@@ -27,6 +48,26 @@ pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
 
             println!("\n--- CONFIGURATION ---");
             println!("Current Configuration: {config:#?}");
+
+            // Print important sysfs paths and whether they exist
+            println!("\n--- SYSFS PATHS ---");
+            check_and_print_sysfs_path(
+                "/sys/devices/system/cpu/intel_pstate/no_turbo",
+                "Intel P-State Turbo Control",
+            );
+            check_and_print_sysfs_path(
+                "/sys/devices/system/cpu/cpufreq/boost",
+                "Generic CPU Boost Control",
+            );
+            check_and_print_sysfs_path(
+                "/sys/devices/system/cpu/amd_pstate/cpufreq/boost",
+                "AMD P-State Boost Control",
+            );
+            check_and_print_sysfs_path(
+                "/sys/firmware/acpi/platform_profile",
+                "ACPI Platform Profile Control",
+            );
+            check_and_print_sysfs_path("/sys/class/power_supply", "Power Supply Information");
 
             println!("\n--- CPU INFORMATION ---");
             println!("Current Governor: {:?}", report.cpu_global.current_governor);
@@ -159,8 +200,57 @@ pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
             let daemon_status = fs::metadata("/var/run/superfreq.pid").is_ok();
             println!("Daemon Running: {daemon_status}");
 
+            // Check for systemd service status
+            if let Ok(systemd_status) = is_systemd_service_active("superfreq") {
+                println!("Systemd Service Active: {systemd_status}");
+            }
+
             Ok(())
         }
         Err(e) => Err(Box::new(e) as Box<dyn Error>),
     }
+}
+
+/// Get kernel version information
+fn get_kernel_info() -> Result<String, Box<dyn Error>> {
+    let output = Command::new("uname").arg("-r").output()?;
+
+    let kernel_version = String::from_utf8(output.stdout)?;
+    Ok(kernel_version.trim().to_string())
+}
+
+/// Get system uptime
+fn get_system_uptime() -> Result<Duration, Box<dyn Error>> {
+    let uptime_str = fs::read_to_string("/proc/uptime")?;
+    let uptime_secs = uptime_str
+        .split_whitespace()
+        .next()
+        .ok_or("Invalid uptime format")?
+        .parse::<f64>()?;
+
+    Ok(Duration::from_secs_f64(uptime_secs))
+}
+
+/// Check if a sysfs path exists and print its status
+fn check_and_print_sysfs_path(path: &str, description: &str) {
+    let exists = std::path::Path::new(path).exists();
+    println!(
+        "{}: {} ({})",
+        description,
+        path,
+        if exists { "Exists" } else { "Not Found" }
+    );
+}
+
+/// Check if a systemd service is active
+fn is_systemd_service_active(service_name: &str) -> Result<bool, Box<dyn Error>> {
+    let output = Command::new("systemctl")
+        .arg("is-active")
+        .arg(format!("{}.service", service_name))
+        .stdout(Stdio::piped()) // capture stdout instead of letting it print
+        .stderr(Stdio::null()) // redirect stderr to null
+        .output()?;
+
+    let status = String::from_utf8(output.stdout)?;
+    Ok(status.trim() == "active")
 }
