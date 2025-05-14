@@ -1,0 +1,31 @@
+name: Create Tag from Crate Version
+
+concurrency: tag
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: cachix/install-nix-action@master
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read Version
+        run: |
+          echo -n "version=v" >> "$GITHUB_ENV"
+          nix run nixpkgs#fq -- -r ".package.version" Cargo.toml >> "$GITHUB_ENV"
+          cat "$GITHUB_ENV"
+
+      - name: Create Tag
+        run: |
+          set -x
+          git tag $version
+          git push --tags || :
