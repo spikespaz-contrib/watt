@@ -309,7 +309,10 @@ pub fn set_min_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
         }
     }
 
-    let freq_khz_str = (freq_mhz * 1000).to_string();
+    // XXX: We use u64 for the intermediate calculation to prevent overflow
+    let freq_khz = u64::from(freq_mhz) * 1000;
+    let freq_khz_str = freq_khz.to_string();
+
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_min_freq");
         if Path::new(&path).exists() {
@@ -333,7 +336,10 @@ pub fn set_max_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
         }
     }
 
-    let freq_khz_str = (freq_mhz * 1000).to_string();
+    // XXX: Use a u64 here as well.
+    let freq_khz = u64::from(freq_mhz) * 1000;
+    let freq_khz_str = freq_khz.to_string();
+
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_max_freq");
         if Path::new(&path).exists() {
