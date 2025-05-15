@@ -202,7 +202,7 @@ fn try_set_per_core_boost(value: &str) -> Result<bool> {
 pub fn set_epp(epp: &str, core_id: Option<u32>) -> Result<()> {
     // Validate the EPP value against available options
     let available_epp = get_available_epp_values()?;
-    if !available_epp.contains(&epp.to_string()) {
+    if !available_epp.iter().any(|v| v.eq_ignore_ascii_case(epp)) {
         return Err(ControlError::InvalidValueError(format!(
             "Invalid EPP value: '{}'. Available values: {}",
             epp,
