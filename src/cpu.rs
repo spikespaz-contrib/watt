@@ -80,11 +80,14 @@ where
 
 pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
     // Validate the governor is available on this system
-    if !is_governor_valid(governor)? {
+    // This returns both the validation result and the list of available governors
+    let (is_valid, available_governors) = is_governor_valid(governor)?;
+
+    if !is_valid {
         return Err(ControlError::InvalidValueError(format!(
             "Governor '{}' is not available on this system. Valid governors: {}",
             governor,
-            get_available_governors()?.join(", ")
+            available_governors.join(", ")
         )));
     }
 
@@ -103,9 +106,18 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
 }
 
 /// Check if the provided governor is available in the system
-fn is_governor_valid(governor: &str) -> Result<bool> {
+/// Returns a tuple of (is_valid, available_governors) to avoid redundant file reads
+fn is_governor_valid(governor: &str) -> Result<(bool, Vec<String>)> {
     let governors = get_available_governors()?;
-    Ok(governors.contains(&governor.to_string()))
+
+    // Convert input governor to lowercase for case-insensitive comparison
+    let governor_lower = governor.to_lowercase();
+
+    // Convert all available governors to lowercase for comparison
+    let governors_lower: Vec<String> = governors.iter().map(|g| g.to_lowercase()).collect();
+
+    // Check if the lowercase governor is in the lowercase list
+    Ok((governors_lower.contains(&governor_lower), governors))
 }
 
 /// Get available CPU governors from the system
