@@ -92,6 +92,11 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
 
 /// Validates that the threshold values are in acceptable ranges
 fn validate_thresholds(start_threshold: u8, stop_threshold: u8) -> Result<()> {
+    if start_threshold == 0 || stop_threshold == 0 {
+        return Err(ControlError::InvalidValueError(
+            "Thresholds must be greater than 0%".to_string(),
+        ));
+    }
     if start_threshold >= stop_threshold {
         return Err(ControlError::InvalidValueError(format!(
             "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
