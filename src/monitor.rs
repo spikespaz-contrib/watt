@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use crate::core::{BatteryInfo, CpuCoreInfo, CpuGlobalInfo, SystemInfo, SystemLoad, SystemReport};
 use crate::cpu::get_logical_core_count;
 use crate::util::error::SysMonitorError;
+use log::debug;
 use std::{
     collections::HashMap,
     fs,
@@ -360,7 +361,7 @@ fn get_fallback_temperature(hw_path: &Path) -> Option<f32> {
 
 pub fn get_all_cpu_core_info() -> Result<Vec<CpuCoreInfo>> {
     let initial_cpu_times = read_all_cpu_times()?;
-    thread::sleep(Duration::from_millis(250)); // Interval for CPU usage calculation
+    thread::sleep(Duration::from_millis(250)); // interval for CPU usage calculation
     let final_cpu_times = read_all_cpu_times()?;
 
     let num_cores = get_logical_core_count()
@@ -503,7 +504,7 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
                 }
             }
         } else if name.starts_with("AC") || name.contains("ACAD") || name.contains("ADP") {
-            // fallback for type file missing
+            // Fallback for type file missing
             if let Ok(online) = read_sysfs_value::<u8>(ps_path.join("online")) {
                 if online == 1 {
                     overall_ac_connected = true;
@@ -511,6 +512,12 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
                 }
             }
         }
+    }
+
+    // No AC adapter detected but we're on a desktop system
+    // Default to AC power for desktops
+    if !overall_ac_connected {
+        overall_ac_connected = is_likely_desktop_system();
     }
 
     for entry in fs::read_dir(power_supply_path)? {
@@ -524,6 +531,12 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
 
         if let Ok(ps_type) = read_sysfs_file_trimmed(ps_path.join("type")) {
             if ps_type == "Battery" {
+                // Skip peripheral batteries that aren't real laptop batteries
+                if is_peripheral_battery(&ps_path, &name) {
+                    debug!("Skipping peripheral battery: {name}");
+                    continue;
+                }
+
                 let status_str = read_sysfs_file_trimmed(ps_path.join("status")).ok();
                 let capacity_percent = read_sysfs_value::<u8>(ps_path.join("capacity")).ok();
 
@@ -564,7 +577,89 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
             }
         }
     }
+
+    // If we found no batteries but have power supplies, we're likely on a desktop
+    if batteries.is_empty() && overall_ac_connected {
+        debug!("No laptop batteries found, likely a desktop system");
+    }
+
     Ok(batteries)
+}
+
+/// Check if a battery is likely a peripheral (mouse, keyboard, etc) not a laptop battery
+fn is_peripheral_battery(ps_path: &Path, name: &str) -> bool {
+    // Common peripheral battery names
+    if name.contains("mouse")
+        || name.contains("keyboard")
+        || name.contains("trackpad")
+        || name.contains("gamepad")
+        || name.contains("controller")
+        || name.contains("headset")
+        || name.contains("headphone")
+    {
+        return true;
+    }
+
+    // Small capacity batteries are likely not laptop batteries
+    if let Ok(energy_full) = read_sysfs_value::<i32>(ps_path.join("energy_full")) {
+        // Most laptop batteries are at least 20,000,000 µWh (20 Wh)
+        // Peripheral batteries are typically much smaller
+        if energy_full < 10_000_000 {
+            // 10 Wh in µWh
+            return true;
+        }
+    }
+
+    // Check for model name that indicates a peripheral
+    if let Ok(model) = read_sysfs_file_trimmed(ps_path.join("model_name")) {
+        if model.contains("bluetooth") || model.contains("wireless") {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Determine if this is likely a desktop system rather than a laptop
+fn is_likely_desktop_system() -> bool {
+    // Check for DMI system type information
+    if let Ok(chassis_type) = fs::read_to_string("/sys/class/dmi/id/chassis_type") {
+        let chassis_type = chassis_type.trim();
+
+        // Chassis types:
+        // 3=Desktop, 4=Low Profile Desktop, 5=Pizza Box, 6=Mini Tower
+        // 7=Tower, 8=Portable, 9=Laptop, 10=Notebook, 11=Hand Held, 13=All In One
+        // 14=Sub Notebook, 15=Space-saving, 16=Lunch Box, 17=Main Server Chassis
+        match chassis_type {
+            "3" | "4" | "5" | "6" | "7" | "15" | "16" | "17" => return true, // desktop form factors
+            "9" | "10" | "14" => return false,                               // laptop form factors
+            _ => {} // Unknown, continue with other checks
+        }
+    }
+
+    // Check CPU power policies, desktops often don't have these
+    let power_saving_exists = Path::new("/sys/module/intel_pstate/parameters/no_hwp").exists()
+        || Path::new("/sys/devices/system/cpu/cpufreq/conservative").exists();
+
+    if !power_saving_exists {
+        return true; // likely a desktop
+    }
+
+    // Check battery-specific ACPI paths that laptops typically have
+    let laptop_acpi_paths = [
+        "/sys/class/power_supply/BAT0",
+        "/sys/class/power_supply/BAT1",
+        "/proc/acpi/battery",
+    ];
+
+    for path in &laptop_acpi_paths {
+        if Path::new(path).exists() {
+            return false; // Likely a laptop
+        }
+    }
+
+    // Default to assuming desktop if we can't determine
+    true
 }
 
 pub fn get_system_load() -> Result<SystemLoad> {

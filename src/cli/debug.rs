@@ -5,7 +5,7 @@ use crate::monitor;
 use std::error::Error;
 use std::fs;
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// Prints comprehensive debug information about the system
 pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
@@ -13,7 +13,6 @@ pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Current date and time
-    let _now = SystemTime::now(); // Prefix with underscore to indicate intentionally unused
     let formatted_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     println!("Timestamp: {formatted_time}");
 
@@ -246,7 +245,7 @@ fn check_and_print_sysfs_path(path: &str, description: &str) {
 fn is_systemd_service_active(service_name: &str) -> Result<bool, Box<dyn Error>> {
     let output = Command::new("systemctl")
         .arg("is-active")
-        .arg(format!("{}.service", service_name))
+        .arg(format!("{service_name}.service"))
         .stdout(Stdio::piped()) // capture stdout instead of letting it print
         .stderr(Stdio::null()) // redirect stderr to null
         .output()?;

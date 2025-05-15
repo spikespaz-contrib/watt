@@ -68,9 +68,7 @@ pub fn load_config_from_path(specific_path: Option<&str>) -> Result<AppConfig, C
     Ok(AppConfig {
         charger: ProfileConfig::from(default_toml_config.charger),
         battery: ProfileConfig::from(default_toml_config.battery),
-        global_battery_charge_thresholds: default_toml_config.battery_charge_thresholds,
         ignored_power_supplies: default_toml_config.ignored_power_supplies,
-        poll_interval_sec: default_toml_config.poll_interval_sec,
         daemon: DaemonConfig::default(),
     })
 }
@@ -99,9 +97,7 @@ fn load_and_parse_config(path: &Path) -> Result<AppConfig, ConfigError> {
     Ok(AppConfig {
         charger: ProfileConfig::from(charger_profile),
         battery: ProfileConfig::from(battery_profile),
-        global_battery_charge_thresholds: toml_app_config.battery_charge_thresholds,
         ignored_power_supplies: toml_app_config.ignored_power_supplies,
-        poll_interval_sec: toml_app_config.poll_interval_sec,
         daemon: DaemonConfig {
             poll_interval_sec: toml_app_config.daemon.poll_interval_sec,
             adaptive_interval: toml_app_config.daemon.adaptive_interval,

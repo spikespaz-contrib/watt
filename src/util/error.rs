@@ -49,7 +49,6 @@ pub enum SysMonitorError {
     ReadError(String),
     ParseError(String),
     ProcStatParseError(String),
-    NotAvailable(String),
 }
 
 impl From<io::Error> for SysMonitorError {
@@ -67,7 +66,6 @@ impl std::fmt::Display for SysMonitorError {
             Self::ProcStatParseError(s) => {
                 write!(f, "Failed to parse /proc/stat: {s}")
             }
-            Self::NotAvailable(s) => write!(f, "Information not available: {s}"),
         }
     }
 }

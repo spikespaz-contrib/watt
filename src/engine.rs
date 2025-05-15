@@ -1,8 +1,39 @@
+use crate::battery;
 use crate::config::{AppConfig, ProfileConfig};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
 use crate::util::error::{ControlError, EngineError};
-use log::{debug, info};
+use log::{debug, info, warn};
+
+/// Try applying a CPU feature and handle common error cases. Centralizes the where we
+/// previously did:
+/// 1. Try to apply a feature setting
+/// 2. If not supported, log a warning and continue
+/// 3. If other error, propagate the error
+fn try_apply_feature<F, T>(
+    feature_name: &str,
+    value_description: &str,
+    apply_fn: F,
+) -> Result<(), EngineError>
+where
+    F: FnOnce() -> Result<T, ControlError>,
+{
+    info!("Setting {feature_name} to '{value_description}'");
+
+    match apply_fn() {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            if matches!(e, ControlError::NotSupported(_)) {
+                warn!(
+                    "{feature_name} setting is not supported on this system. Skipping {feature_name} configuration."
+                );
+                Ok(())
+            } else {
+                Err(EngineError::ControlError(e))
+            }
+        }
+    }
+}
 
 /// Determines the appropriate CPU profile based on power status or forced mode,
 /// and applies the settings using functions from the `cpu` module.
@@ -17,6 +48,8 @@ pub fn determine_and_apply_settings(
             "Governor override is active: '{}'. Setting governor.",
             override_governor.trim()
         );
+
+        // Apply the override governor setting - validation is handled by set_governor
         cpu::set_governor(override_governor.trim(), None)?;
     }
 
@@ -35,11 +68,15 @@ pub fn determine_and_apply_settings(
         }
     } else {
         // Determine AC/Battery status
-        // If no batteries, assume AC power (desktop).
-        // Otherwise, check the ac_connected status from the (first) battery.
-        // XXX: This relies on the setting ac_connected in BatteryInfo being set correctly.
-        let on_ac_power =
-            report.batteries.is_empty() || report.batteries.first().is_some_and(|b| b.ac_connected);
+        // For desktops (no batteries), we should always use the AC power profile
+        // For laptops, we check if any battery is present and not connected to AC
+        let on_ac_power = if report.batteries.is_empty() {
+            // No batteries means desktop/server, always on AC
+            true
+        } else {
+            // At least one battery exists, check if it's on AC
+            report.batteries.first().is_some_and(|b| b.ac_connected)
+        };
 
         if on_ac_power {
             info!("On AC power, selecting Charger profile.");
@@ -53,7 +90,19 @@ pub fn determine_and_apply_settings(
     // Apply settings from selected_profile_config
     if let Some(governor) = &selected_profile_config.governor {
         info!("Setting governor to '{governor}'");
-        cpu::set_governor(governor, None)?;
+        // Let set_governor handle the validation
+        if let Err(e) = cpu::set_governor(governor, None) {
+            // If the governor is not available, log a warning
+            if matches!(e, ControlError::InvalidValueError(_))
+                || matches!(e, ControlError::NotSupported(_))
+            {
+                warn!(
+                    "Configured governor '{governor}' is not available on this system. Skipping."
+                );
+            } else {
+                return Err(e.into());
+            }
+        }
     }
 
     if let Some(turbo_setting) = selected_profile_config.turbo {
@@ -63,40 +112,56 @@ pub fn determine_and_apply_settings(
                 debug!("Managing turbo in auto mode based on system conditions");
                 manage_auto_turbo(report, selected_profile_config)?;
             }
-            _ => cpu::set_turbo(turbo_setting)?,
+            _ => {
+                try_apply_feature("Turbo boost", &format!("{turbo_setting:?}"), || {
+                    cpu::set_turbo(turbo_setting)
+                })?;
+            }
         }
     }
 
     if let Some(epp) = &selected_profile_config.epp {
-        info!("Setting EPP to '{epp}'");
-        cpu::set_epp(epp, None)?;
+        try_apply_feature("EPP", epp, || cpu::set_epp(epp, None))?;
     }
 
     if let Some(epb) = &selected_profile_config.epb {
-        info!("Setting EPB to '{epb}'");
-        cpu::set_epb(epb, None)?;
+        try_apply_feature("EPB", epb, || cpu::set_epb(epb, None))?;
     }
 
     if let Some(min_freq) = selected_profile_config.min_freq_mhz {
-        info!("Setting min frequency to '{min_freq} MHz'");
-        cpu::set_min_frequency(min_freq, None)?;
+        try_apply_feature("min frequency", &format!("{min_freq} MHz"), || {
+            cpu::set_min_frequency(min_freq, None)
+        })?;
     }
 
     if let Some(max_freq) = selected_profile_config.max_freq_mhz {
-        info!("Setting max frequency to '{max_freq} MHz'");
-        cpu::set_max_frequency(max_freq, None)?;
+        try_apply_feature("max frequency", &format!("{max_freq} MHz"), || {
+            cpu::set_max_frequency(max_freq, None)
+        })?;
     }
 
     if let Some(profile) = &selected_profile_config.platform_profile {
-        info!("Setting platform profile to '{profile}'");
-        cpu::set_platform_profile(profile)?;
+        try_apply_feature("platform profile", profile, || {
+            cpu::set_platform_profile(profile)
+        })?;
     }
 
-    // Apply battery charge thresholds if configured
-    apply_battery_charge_thresholds(
-        selected_profile_config.battery_charge_thresholds,
-        config.global_battery_charge_thresholds,
-    )?;
+    // Set battery charge thresholds if configured
+    if let Some((start_threshold, stop_threshold)) =
+        selected_profile_config.battery_charge_thresholds
+    {
+        if start_threshold < stop_threshold && stop_threshold <= 100 {
+            info!("Setting battery charge thresholds: {start_threshold}-{stop_threshold}%");
+            match battery::set_battery_charge_thresholds(start_threshold, stop_threshold) {
+                Ok(()) => debug!("Battery charge thresholds set successfully"),
+                Err(e) => warn!("Failed to set battery charge thresholds: {e}"),
+            }
+        } else {
+            warn!(
+                "Invalid battery threshold values: start={start_threshold}, stop={stop_threshold}"
+            );
+        }
+    }
 
     debug!("Profile settings applied successfully.");
 
@@ -190,43 +255,5 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
             Ok(())
         }
         Err(e) => Err(EngineError::ControlError(e)),
-    }
-}
-
-/// Apply battery charge thresholds from configuration
-fn apply_battery_charge_thresholds(
-    profile_thresholds: Option<(u8, u8)>,
-    global_thresholds: Option<(u8, u8)>,
-) -> Result<(), EngineError> {
-    // Try profile-specific thresholds first, fall back to global thresholds
-    let thresholds = profile_thresholds.or(global_thresholds);
-
-    if let Some((start_threshold, stop_threshold)) = thresholds {
-        info!("Setting battery charge thresholds: {start_threshold}-{stop_threshold}%");
-        match cpu::set_battery_charge_thresholds(start_threshold, stop_threshold) {
-            Ok(()) => {
-                debug!("Successfully set battery charge thresholds");
-                Ok(())
-            }
-            Err(e) => {
-                // If the battery doesn't support thresholds, log but don't fail
-                if matches!(e, ControlError::NotSupported(_)) {
-                    debug!("Battery charge thresholds not supported: {e}");
-                    Ok(())
-                } else {
-                    // For permission errors, provide more helpful message
-                    if matches!(e, ControlError::PermissionDenied(_)) {
-                        debug!(
-                            "Permission denied setting battery thresholds - requires root privileges"
-                        );
-                    }
-                    Err(EngineError::ControlError(e))
-                }
-            }
-        }
-    } else {
-        // No thresholds configured, this is not an error
-        debug!("No battery charge thresholds configured");
-        Ok(())
     }
 }

@@ -38,17 +38,9 @@ pub struct AppConfig {
     pub charger: ProfileConfig,
     #[serde(default)]
     pub battery: ProfileConfig,
-    #[serde(rename = "battery_charge_thresholds")]
-    pub global_battery_charge_thresholds: Option<(u8, u8)>, // (start_threshold, stop_threshold)
     pub ignored_power_supplies: Option<Vec<String>>,
-    #[serde(default = "default_poll_interval_sec")]
-    pub poll_interval_sec: u64,
     #[serde(default)]
     pub daemon: DaemonConfig,
-}
-
-const fn default_poll_interval_sec() -> u64 {
-    5
 }
 
 // Error type for config loading
@@ -223,6 +215,10 @@ impl Default for DaemonConfig {
             stats_file_path: default_stats_file_path(),
         }
     }
+}
+
+const fn default_poll_interval_sec() -> u64 {
+    5
 }
 
 const fn default_adaptive_interval() -> bool {

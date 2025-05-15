@@ -1,3 +1,4 @@
+mod battery;
 mod cli;
 mod config;
 mod conflict;
@@ -370,10 +371,9 @@ fn main() {
             stop_threshold,
         }) => {
             info!(
-                "Setting battery thresholds: start at {}%, stop at {}%",
-                start_threshold, stop_threshold
+                "Setting battery thresholds: start at {start_threshold}%, stop at {stop_threshold}%"
             );
-            cpu::set_battery_charge_thresholds(start_threshold, stop_threshold)
+            battery::set_battery_charge_thresholds(start_threshold, stop_threshold)
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
         }
         Some(Commands::Daemon { verbose }) => daemon::run_daemon(config, verbose),
