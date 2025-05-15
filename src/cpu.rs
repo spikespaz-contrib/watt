@@ -246,7 +246,9 @@ fn get_available_epp_values() -> Result<Vec<String>> {
             "default".to_string(),
             "performance".to_string(),
             "balance_performance".to_string(),
+            "balance_performance".replace('_', "-"),
             "balance_power".to_string(),
+            "balance_power".replace('_', "-"),
             "power".to_string(),
         ]);
     }
