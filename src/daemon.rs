@@ -202,16 +202,6 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
     Ok(())
 }
 
-/// Initialize the logger with the appropriate level
-const fn get_log_level_filter(log_level: LogLevel) -> LevelFilter {
-    match log_level {
-        LogLevel::Error => LevelFilter::Error,
-        LogLevel::Warning => LevelFilter::Warn,
-        LogLevel::Info => LevelFilter::Info,
-        LogLevel::Debug => LevelFilter::Debug,
-    }
-}
-
 /// Write current system stats to a file for --stats to read
 fn write_stats_file(path: &str, report: &SystemReport) -> Result<(), std::io::Error> {
     let mut file = File::create(path)?;

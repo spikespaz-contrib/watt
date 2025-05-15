@@ -77,6 +77,13 @@ enum Commands {
     },
     /// Set ACPI platform profile
     SetPlatformProfile { profile: String },
+    /// Set battery charge thresholds to extend battery lifespan
+    SetBatteryThresholds {
+        /// Percentage at which charging starts (when below this value)
+        start_threshold: u8,
+        /// Percentage at which charging stops (when it reaches this value)
+        stop_threshold: u8,
+    },
 }
 
 fn main() {
@@ -358,6 +365,17 @@ fn main() {
         }
         Some(Commands::SetPlatformProfile { profile }) => cpu::set_platform_profile(&profile)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
+        Some(Commands::SetBatteryThresholds {
+            start_threshold,
+            stop_threshold,
+        }) => {
+            info!(
+                "Setting battery thresholds: start at {}%, stop at {}%",
+                start_threshold, stop_threshold
+            );
+            cpu::set_battery_charge_thresholds(start_threshold, stop_threshold)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        }
         Some(Commands::Daemon { verbose }) => daemon::run_daemon(config, verbose),
         Some(Commands::Debug) => cli::debug::run_debug(&config),
         None => {

@@ -4,6 +4,7 @@ use std::io;
 pub enum ControlError {
     Io(io::Error),
     WriteError(String),
+    ReadError(String),
     InvalidValueError(String),
     NotSupported(String),
     PermissionDenied(String),
@@ -24,6 +25,7 @@ impl std::fmt::Display for ControlError {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::WriteError(s) => write!(f, "Failed to write to sysfs path: {s}"),
+            Self::ReadError(s) => write!(f, "Failed to read sysfs path: {s}"),
             Self::InvalidValueError(s) => write!(f, "Invalid value for setting: {s}"),
             Self::NotSupported(s) => write!(f, "Control action not supported: {s}"),
             Self::PermissionDenied(s) => {

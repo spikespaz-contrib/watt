@@ -13,7 +13,7 @@ pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Current date and time
-    let now = SystemTime::now();
+    let _now = SystemTime::now(); // Prefix with underscore to indicate intentionally unused
     let formatted_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     println!("Timestamp: {formatted_time}");
 

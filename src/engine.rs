@@ -1,7 +1,7 @@
 use crate::config::{AppConfig, ProfileConfig};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
-use crate::util::error::EngineError;
+use crate::util::error::{ControlError, EngineError};
 use log::{debug, info};
 
 /// Determines the appropriate CPU profile based on power status or forced mode,
@@ -91,6 +91,12 @@ pub fn determine_and_apply_settings(
         info!("Setting platform profile to '{profile}'");
         cpu::set_platform_profile(profile)?;
     }
+
+    // Apply battery charge thresholds if configured
+    apply_battery_charge_thresholds(
+        selected_profile_config.battery_charge_thresholds,
+        config.global_battery_charge_thresholds,
+    )?;
 
     debug!("Profile settings applied successfully.");
 
@@ -184,5 +190,41 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
             Ok(())
         }
         Err(e) => Err(EngineError::ControlError(e)),
+    }
+}
+
+/// Apply battery charge thresholds from configuration
+fn apply_battery_charge_thresholds(
+    profile_thresholds: Option<(u8, u8)>,
+    global_thresholds: Option<(u8, u8)>,
+) -> Result<(), EngineError> {
+    // Try profile-specific thresholds first, fall back to global thresholds
+    let thresholds = profile_thresholds.or(global_thresholds);
+    
+    if let Some((start_threshold, stop_threshold)) = thresholds {
+        info!("Setting battery charge thresholds: {start_threshold}-{stop_threshold}%");
+        match cpu::set_battery_charge_thresholds(start_threshold, stop_threshold) {
+            Ok(()) => {
+                debug!("Successfully set battery charge thresholds");
+                Ok(())
+            }
+            Err(e) => {
+                // If the battery doesn't support thresholds, log but don't fail
+                if matches!(e, ControlError::NotSupported(_)) {
+                    debug!("Battery charge thresholds not supported: {e}");
+                    Ok(())
+                } else {
+                    // For permission errors, provide more helpful message
+                    if matches!(e, ControlError::PermissionDenied(_)) {
+                        debug!("Permission denied setting battery thresholds - requires root privileges");
+                    }
+                    Err(EngineError::ControlError(e))
+                }
+            }
+        }
+    } else {
+        // No thresholds configured, this is not an error
+        debug!("No battery charge thresholds configured");
+        Ok(())
     }
 }

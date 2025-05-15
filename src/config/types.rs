@@ -13,6 +13,7 @@ pub struct ProfileConfig {
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
     pub turbo_auto_settings: Option<TurboAutoSettings>,
+    pub battery_charge_thresholds: Option<(u8, u8)>,
 }
 
 impl Default for ProfileConfig {
@@ -26,6 +27,7 @@ impl Default for ProfileConfig {
             max_freq_mhz: None,     // no override
             platform_profile: None, // no override
             turbo_auto_settings: Some(TurboAutoSettings::default()),
+            battery_charge_thresholds: None,
         }
     }
 }
@@ -36,7 +38,8 @@ pub struct AppConfig {
     pub charger: ProfileConfig,
     #[serde(default)]
     pub battery: ProfileConfig,
-    pub battery_charge_thresholds: Option<(u8, u8)>, // (start_threshold, stop_threshold)
+    #[serde(rename = "battery_charge_thresholds")]
+    pub global_battery_charge_thresholds: Option<(u8, u8)>, // (start_threshold, stop_threshold)
     pub ignored_power_supplies: Option<Vec<String>>,
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
@@ -92,6 +95,7 @@ pub struct ProfileConfigToml {
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
+    pub battery_charge_thresholds: Option<(u8, u8)>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -118,6 +122,7 @@ impl Default for ProfileConfigToml {
             min_freq_mhz: None,
             max_freq_mhz: None,
             platform_profile: None,
+            battery_charge_thresholds: None,
         }
     }
 }
@@ -175,6 +180,7 @@ impl From<ProfileConfigToml> for ProfileConfig {
             max_freq_mhz: toml_config.max_freq_mhz,
             platform_profile: toml_config.platform_profile,
             turbo_auto_settings: Some(TurboAutoSettings::default()),
+            battery_charge_thresholds: toml_config.battery_charge_thresholds,
         }
     }
 }
