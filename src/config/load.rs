@@ -86,7 +86,8 @@ fn load_and_parse_config(path: &Path) -> Result<AppConfig, ConfigError> {
 
     // If profile-specific battery thresholds are not set, inherit from global config
     if charger_profile.battery_charge_thresholds.is_none() {
-        charger_profile.battery_charge_thresholds = toml_app_config.battery_charge_thresholds;
+        charger_profile.battery_charge_thresholds =
+            toml_app_config.battery_charge_thresholds.clone();
     }
 
     if battery_profile.battery_charge_thresholds.is_none() {

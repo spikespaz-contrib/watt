@@ -1,6 +1,12 @@
 // Configuration types and structures for superfreq
 use crate::core::TurboSetting;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct BatteryChargeThresholds {
+    pub start: u8,
+    pub stop: u8,
+}
 
 // Structs for configuration using serde::Deserialize
 #[derive(Deserialize, Debug, Clone)]
@@ -13,7 +19,8 @@ pub struct ProfileConfig {
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
     pub turbo_auto_settings: Option<TurboAutoSettings>,
-    pub battery_charge_thresholds: Option<(u8, u8)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
 }
 
 impl Default for ProfileConfig {
@@ -87,7 +94,8 @@ pub struct ProfileConfigToml {
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
-    pub battery_charge_thresholds: Option<(u8, u8)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -96,10 +104,9 @@ pub struct AppConfigToml {
     pub charger: ProfileConfigToml,
     #[serde(default)]
     pub battery: ProfileConfigToml,
-    pub battery_charge_thresholds: Option<(u8, u8)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
     pub ignored_power_supplies: Option<Vec<String>>,
-    #[serde(default = "default_poll_interval_sec")]
-    pub poll_interval_sec: u64,
     #[serde(default)]
     pub daemon: DaemonConfigToml,
 }

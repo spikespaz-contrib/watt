@@ -147,9 +147,10 @@ pub fn determine_and_apply_settings(
     }
 
     // Set battery charge thresholds if configured
-    if let Some((start_threshold, stop_threshold)) =
-        selected_profile_config.battery_charge_thresholds
-    {
+    if let Some(thresholds) = &selected_profile_config.battery_charge_thresholds {
+        let start_threshold = thresholds.start;
+        let stop_threshold = thresholds.stop;
+
         if start_threshold < stop_threshold && stop_threshold <= 100 {
             info!("Setting battery charge thresholds: {start_threshold}-{stop_threshold}%");
             match battery::set_battery_charge_thresholds(start_threshold, stop_threshold) {
