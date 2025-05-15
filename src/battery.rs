@@ -82,6 +82,14 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
         ));
     }
 
+    // Check if the power supply directory is writable
+    // This helps identify permission issues in containerized environments early
+    if !is_path_writable(power_supply_path) {
+        return Err(ControlError::PermissionDenied(
+            "Power supply path exists but is not writable. This may occur in containerized environments.".to_string(),
+        ));
+    }
+
     let supported_batteries = find_supported_batteries(power_supply_path)?;
     if supported_batteries.is_empty() {
         return Err(ControlError::NotSupported(
@@ -239,4 +247,25 @@ fn is_battery(path: &Path) -> Result<bool> {
         .to_string();
 
     Ok(ps_type == "Battery")
+}
+
+/// Check if a directory is writable by attempting to open a temporary file for writing
+fn is_path_writable(path: &Path) -> bool {
+    use std::fs::OpenOptions;
+
+    // Try to create a temporary file to check write permissions
+    // If we're in a container with a read-only mount, this will fail
+    let temp_file_path = path.join(".superfreq_write_test");
+    let result = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&temp_file_path);
+
+    // Clean up the temporary file if we created it
+    if result.is_ok() {
+        let _ = fs::remove_file(temp_file_path);
+        true
+    } else {
+        false
+    }
 }
