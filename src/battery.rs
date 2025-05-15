@@ -161,6 +161,19 @@ fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
     })
 }
 
+/// Read a value from a sysfs file
+fn read_sysfs_value(path: impl AsRef<Path>) -> Result<String> {
+    let p = path.as_ref();
+    fs::read_to_string(p).map_err(|e| {
+        let error_msg = format!("Path: {:?}, Error: {}", p.display(), e);
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            ControlError::PermissionDenied(error_msg)
+        } else {
+            ControlError::ReadError(error_msg)
+        }
+    }).map(|s| s.trim().to_string())
+}
+
 /// Safely check if a path exists and is writable
 fn path_exists_and_writable(path: &Path) -> bool {
     if !path.exists() {
@@ -203,37 +216,57 @@ fn apply_thresholds_to_batteries(
     for battery in batteries {
         let start_path = battery.path.join(battery.pattern.start_path);
         let stop_path = battery.path.join(battery.pattern.stop_path);
-
-        match (
-            write_sysfs_value(&start_path, &start_threshold.to_string()),
-            write_sysfs_value(&stop_path, &stop_threshold.to_string()),
-        ) {
-            (Ok(()), Ok(())) => {
-                debug!(
-                    "Set {}-{}% charge thresholds for {} battery '{}'",
-                    start_threshold, stop_threshold, battery.pattern.description, battery.name
-                );
-                success_count += 1;
-            }
-            (start_result, stop_result) => {
-                let mut error_msg = format!(
-                    "Failed to set thresholds for {} battery '{}'",
-                    battery.pattern.description, battery.name
-                );
-                if let Err(e) = start_result {
-                    error_msg.push_str(&format!(": start threshold error: {e}"));
+        
+        // Read current thresholds in case we need to restore them
+        let current_start = read_sysfs_value(&start_path).ok();
+        let current_stop = read_sysfs_value(&stop_path).ok();
+        
+        // Write stop threshold first (must be >= start threshold)
+        let stop_result = write_sysfs_value(&stop_path, &stop_threshold.to_string());
+        
+        // Only proceed to set start threshold if stop threshold was set successfully
+        if let Ok(()) = stop_result {
+            let start_result = write_sysfs_value(&start_path, &start_threshold.to_string());
+            
+            match start_result {
+                Ok(()) => {
+                    debug!(
+                        "Set {}-{}% charge thresholds for {} battery '{}'",
+                        start_threshold, stop_threshold, battery.pattern.description, battery.name
+                    );
+                    success_count += 1;
                 }
-                if let Err(e) = stop_result {
-                    error_msg.push_str(&format!(": stop threshold error: {e}"));
+                Err(e) => {
+                    // Start threshold failed, try to restore the previous stop threshold
+                    if let Some(prev_stop) = &current_stop {
+                        let restore_result = write_sysfs_value(&stop_path, prev_stop);
+                        if let Err(re) = restore_result {
+                            warn!(
+                                "Failed to restore previous stop threshold for battery '{}': {}. Battery may be in an inconsistent state.",
+                                battery.name, re
+                            );
+                        } else {
+                            debug!("Restored previous stop threshold ({}) for battery '{}'", prev_stop, battery.name);
+                        }
+                    }
+                    
+                    errors.push(format!(
+                        "Failed to set start threshold for {} battery '{}': {}",
+                        battery.pattern.description, battery.name, e
+                    ));
                 }
-                errors.push(error_msg);
             }
+        } else if let Err(e) = stop_result {
+            errors.push(format!(
+                "Failed to set stop threshold for {} battery '{}': {}",
+                battery.pattern.description, battery.name, e
+            ));
         }
     }
 
     if success_count > 0 {
         if !errors.is_empty() {
-            debug!(
+            warn!(
                 "Partial success setting battery thresholds: {}",
                 errors.join("; ")
             );
