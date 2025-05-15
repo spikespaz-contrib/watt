@@ -16,6 +16,32 @@ pub struct ThresholdPathPattern {
     pub stop_path: &'static str,
 }
 
+// Threshold patterns
+const THRESHOLD_PATTERNS: &[ThresholdPathPattern] = &[
+    ThresholdPathPattern {
+        description: "Standard",
+        start_path: "charge_control_start_threshold",
+        stop_path: "charge_control_end_threshold",
+    },
+    ThresholdPathPattern {
+        description: "ASUS",
+        start_path: "charge_control_start_percentage",
+        stop_path: "charge_control_end_percentage",
+    },
+    // Combine Huawei and ThinkPad since they use identical paths
+    ThresholdPathPattern {
+        description: "ThinkPad/Huawei",
+        start_path: "charge_start_threshold",
+        stop_path: "charge_stop_threshold",
+    },
+    // Framework laptop support
+    ThresholdPathPattern {
+        description: "Framework",
+        start_path: "charge_behaviour_start_threshold",
+        stop_path: "charge_behaviour_end_threshold",
+    },
+];
+
 /// Represents a battery that supports charge threshold control
 pub struct SupportedBattery {
     pub name: String,
@@ -144,39 +170,7 @@ fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
 
 /// Identifies if a battery supports threshold control and which pattern it uses
 fn find_battery_with_threshold_support(ps_path: &Path) -> Option<SupportedBattery> {
-    let threshold_paths = vec![
-        ThresholdPathPattern {
-            description: "Standard",
-            start_path: "charge_control_start_threshold",
-            stop_path: "charge_control_end_threshold",
-        },
-        ThresholdPathPattern {
-            description: "ASUS",
-            start_path: "charge_control_start_percentage",
-            stop_path: "charge_control_end_percentage",
-        },
-        ThresholdPathPattern {
-            description: "Huawei",
-            start_path: "charge_start_threshold",
-            stop_path: "charge_stop_threshold",
-        },
-        // ThinkPad-specific, sometimes used in addition to standard paths
-        ThresholdPathPattern {
-            description: "ThinkPad",
-            start_path: "charge_start_threshold",
-            stop_path: "charge_stop_threshold",
-        },
-        // Framework laptop support
-        // FIXME: This needs actual testing. I inferred this behaviour from some
-        // Framework-specific code, but it may not be correct.
-        ThresholdPathPattern {
-            description: "Framework",
-            start_path: "charge_behaviour_start_threshold",
-            stop_path: "charge_behaviour_end_threshold",
-        },
-    ];
-
-    for pattern in &threshold_paths {
+    for pattern in THRESHOLD_PATTERNS {
         let start_threshold_path = ps_path.join(pattern.start_path);
         let stop_threshold_path = ps_path.join(pattern.stop_path);
         if start_threshold_path.exists() && stop_threshold_path.exists() {
