@@ -1,5 +1,5 @@
 use crate::battery;
-use crate::config::{AppConfig, ProfileConfig};
+use crate::config::{AppConfig, ProfileConfig, TurboAutoSettings};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
 use crate::util::error::{ControlError, EngineError};
@@ -177,6 +177,9 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     // Get the auto turbo settings from the config, or use defaults
     let turbo_settings = config.turbo_auto_settings.clone().unwrap_or_default();
 
+    // Validate the complete configuration to ensure it's usable
+    validate_turbo_auto_settings(&turbo_settings)?;
+
     // Get average CPU temperature and CPU load
     let cpu_temp = report.cpu_global.average_temperature_celsius;
 
@@ -201,14 +204,6 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
             None
         }
     };
-
-    // Validate the configuration to ensure it's usable
-    if turbo_settings.load_threshold_high <= turbo_settings.load_threshold_low {
-        return Err(EngineError::ConfigurationError(
-            "Invalid turbo auto settings: high threshold must be greater than low threshold"
-                .to_string(),
-        ));
-    }
 
     // Decision logic for enabling/disabling turbo
     let enable_turbo = match (cpu_temp, avg_cpu_usage) {
@@ -261,4 +256,31 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
         Err(e) => Err(EngineError::ControlError(e)),
     }
+}
+
+fn validate_turbo_auto_settings(settings: &TurboAutoSettings) -> Result<(), EngineError> {
+    // Validate load thresholds
+    if settings.load_threshold_high <= settings.load_threshold_low {
+        return Err(EngineError::ConfigurationError(
+            "Invalid turbo auto settings: high threshold must be greater than low threshold"
+                .to_string(),
+        ));
+    }
+
+    // Validate range of load thresholds (should be 0-100%)
+    if settings.load_threshold_high > 100.0 || settings.load_threshold_low < 0.0 {
+        return Err(EngineError::ConfigurationError(
+            "Invalid turbo auto settings: load thresholds must be between 0% and 100%".to_string(),
+        ));
+    }
+
+    // Validate temperature threshold (realistic range for CPU temps in Celsius)
+    if settings.temp_threshold_high <= 0.0 || settings.temp_threshold_high > 110.0 {
+        return Err(EngineError::ConfigurationError(
+            "Invalid turbo auto settings: temperature threshold must be between 0°C and 110°C"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }

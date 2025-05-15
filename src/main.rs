@@ -357,15 +357,70 @@ fn main() {
             cpu::set_epb(&epb, core_id).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
         }
         Some(Commands::SetMinFreq { freq_mhz, core_id }) => {
-            cpu::set_min_frequency(freq_mhz, core_id)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            // Basic validation for reasonable CPU frequency values
+            if freq_mhz == 0 {
+                error!("Minimum frequency cannot be zero");
+                Err(Box::new(ControlError::InvalidValueError(
+                    "Minimum frequency cannot be zero".to_string(),
+                )) as Box<dyn std::error::Error>)
+            } else if freq_mhz > 10000 {
+                // Extremely high value unlikely to be valid
+                error!("Minimum frequency ({freq_mhz} MHz) is unreasonably high");
+                Err(Box::new(ControlError::InvalidValueError(format!(
+                    "Minimum frequency ({freq_mhz} MHz) is unreasonably high"
+                ))) as Box<dyn std::error::Error>)
+            } else {
+                cpu::set_min_frequency(freq_mhz, core_id)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }
         }
         Some(Commands::SetMaxFreq { freq_mhz, core_id }) => {
-            cpu::set_max_frequency(freq_mhz, core_id)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            // Basic validation for reasonable CPU frequency values
+            if freq_mhz == 0 {
+                error!("Maximum frequency cannot be zero");
+                Err(Box::new(ControlError::InvalidValueError(
+                    "Maximum frequency cannot be zero".to_string(),
+                )) as Box<dyn std::error::Error>)
+            } else if freq_mhz > 10000 {
+                // Extremely high value unlikely to be valid
+                error!("Maximum frequency ({freq_mhz} MHz) is unreasonably high");
+                Err(Box::new(ControlError::InvalidValueError(format!(
+                    "Maximum frequency ({freq_mhz} MHz) is unreasonably high"
+                ))) as Box<dyn std::error::Error>)
+            } else {
+                cpu::set_max_frequency(freq_mhz, core_id)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }
         }
-        Some(Commands::SetPlatformProfile { profile }) => cpu::set_platform_profile(&profile)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
+        Some(Commands::SetPlatformProfile { profile }) => {
+            // Get available platform profiles and validate early if possible
+            match cpu::get_platform_profiles() {
+                Ok(available_profiles) => {
+                    if !available_profiles.contains(&profile) {
+                        error!(
+                            "Invalid platform profile: '{}'. Available profiles: {}",
+                            profile,
+                            available_profiles.join(", ")
+                        );
+                        Err(Box::new(ControlError::InvalidProfile(format!(
+                            "Invalid platform profile: '{}'. Available profiles: {}",
+                            profile,
+                            available_profiles.join(", ")
+                        ))) as Box<dyn std::error::Error>)
+                    } else {
+                        info!("Setting platform profile to '{}'", profile);
+                        cpu::set_platform_profile(&profile)
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                    }
+                }
+                Err(_) => {
+                    // If we can't get profiles (e.g., feature not supported), pass through to the function
+                    // which will provide appropriate error
+                    cpu::set_platform_profile(&profile)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                }
+            }
+        }
         Some(Commands::SetBatteryThresholds {
             start_threshold,
             stop_threshold,

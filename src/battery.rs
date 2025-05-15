@@ -161,12 +161,29 @@ fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
     })
 }
 
+/// Safely check if a path exists and is writable
+fn path_exists_and_writable(path: &Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+
+    // Try to open the file with write access to verify write permission
+    match fs::OpenOptions::new().write(true).open(path) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
 /// Identifies if a battery supports threshold control and which pattern it uses
 fn find_battery_with_threshold_support(ps_path: &Path) -> Option<SupportedBattery<'static>> {
     for pattern in THRESHOLD_PATTERNS {
         let start_threshold_path = ps_path.join(pattern.start_path);
         let stop_threshold_path = ps_path.join(pattern.stop_path);
-        if start_threshold_path.exists() && stop_threshold_path.exists() {
+
+        // Ensure both paths exist and are writable before considering this battery supported
+        if path_exists_and_writable(&start_threshold_path)
+            && path_exists_and_writable(&stop_threshold_path)
+        {
             return Some(SupportedBattery {
                 name: ps_path.file_name()?.to_string_lossy().to_string(),
                 pattern,

@@ -79,6 +79,15 @@ where
 }
 
 pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
+    // Validate the governor is available on this system
+    if !is_governor_valid(governor)? {
+        return Err(ControlError::InvalidValueError(format!(
+            "Governor '{}' is not available on this system. Valid governors: {}",
+            governor,
+            get_available_governors()?.join(", ")
+        )));
+    }
+
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_governor");
         if Path::new(&path).exists() {
@@ -91,6 +100,32 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
     };
 
     core_id.map_or_else(|| for_each_cpu_core(action), action)
+}
+
+/// Check if the provided governor is available in the system
+fn is_governor_valid(governor: &str) -> Result<bool> {
+    let governors = get_available_governors()?;
+    Ok(governors.contains(&governor.to_string()))
+}
+
+/// Get available CPU governors from the system
+fn get_available_governors() -> Result<Vec<String>> {
+    // We'll check cpu0's available governors as they're typically the same across cores
+    let path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors";
+
+    if !Path::new(path).exists() {
+        return Err(ControlError::NotSupported(
+            "Could not determine available governors".to_string(),
+        ));
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|e| ControlError::ReadError(format!("Failed to read available governors: {e}")))?;
+
+    Ok(content
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect())
 }
 
 pub fn set_turbo(setting: TurboSetting) -> Result<()> {
@@ -153,6 +188,16 @@ fn try_set_per_core_boost(value: &str) -> Result<bool> {
 }
 
 pub fn set_epp(epp: &str, core_id: Option<u32>) -> Result<()> {
+    // Validate the EPP value against available options
+    let available_epp = get_available_epp_values()?;
+    if !available_epp.contains(&epp.to_string()) {
+        return Err(ControlError::InvalidValueError(format!(
+            "Invalid EPP value: '{}'. Available values: {}",
+            epp,
+            available_epp.join(", ")
+        )));
+    }
+
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/energy_performance_preference");
         if Path::new(&path).exists() {
@@ -164,8 +209,37 @@ pub fn set_epp(epp: &str, core_id: Option<u32>) -> Result<()> {
     core_id.map_or_else(|| for_each_cpu_core(action), action)
 }
 
+/// Get available EPP values from the system
+fn get_available_epp_values() -> Result<Vec<String>> {
+    let path = "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_available_preferences";
+
+    if !Path::new(path).exists() {
+        // If the file doesn't exist, fall back to a default set of common values
+        // This is safer than failing outright, as some systems may allow these values
+        // even without explicitly listing them
+        return Ok(vec![
+            "default".to_string(),
+            "performance".to_string(),
+            "balance_performance".to_string(),
+            "balance_power".to_string(),
+            "power".to_string(),
+        ]);
+    }
+
+    let content = fs::read_to_string(path).map_err(|e| {
+        ControlError::ReadError(format!("Failed to read available EPP values: {e}"))
+    })?;
+
+    Ok(content
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect())
+}
+
 pub fn set_epb(epb: &str, core_id: Option<u32>) -> Result<()> {
-    // EPB is often an integer 0-15.
+    // Validate EPB value - should be a number 0-15 or a recognized string value
+    validate_epb_value(epb)?;
+
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/energy_performance_bias");
         if Path::new(&path).exists() {
@@ -177,7 +251,54 @@ pub fn set_epb(epb: &str, core_id: Option<u32>) -> Result<()> {
     core_id.map_or_else(|| for_each_cpu_core(action), action)
 }
 
+fn validate_epb_value(epb: &str) -> Result<()> {
+    // EPB can be a number from 0-15 or a recognized string
+    // Try parsing as a number first
+    if let Ok(value) = epb.parse::<u8>() {
+        if value <= 15 {
+            return Ok(());
+        } else {
+            return Err(ControlError::InvalidValueError(format!(
+                "EPB numeric value must be between 0 and 15, got {}",
+                value
+            )));
+        }
+    }
+
+    // If not a number, check if it's a recognized string value
+    let valid_strings = [
+        "performance",
+        "balance-performance",
+        "balance-power",
+        "power",
+        // Alternative forms
+        "balance_performance",
+        "balance_power",
+    ];
+
+    if valid_strings.contains(&epb) {
+        Ok(())
+    } else {
+        Err(ControlError::InvalidValueError(format!(
+            "Invalid EPB value: '{}'. Must be a number 0-15 or one of: {}",
+            epb,
+            valid_strings.join(", ")
+        )))
+    }
+}
+
 pub fn set_min_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
+    // Check if the new minimum frequency would be greater than current maximum
+    if let Some(id) = core_id {
+        validate_min_frequency(id, freq_mhz)?;
+    } else {
+        // Check for all cores
+        let num_cores = get_logical_core_count()?;
+        for id in 0..num_cores {
+            validate_min_frequency(id, freq_mhz)?;
+        }
+    }
+
     let freq_khz_str = (freq_mhz * 1000).to_string();
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_min_freq");
@@ -191,6 +312,17 @@ pub fn set_min_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
 }
 
 pub fn set_max_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
+    // Check if the new maximum frequency would be less than current minimum
+    if let Some(id) = core_id {
+        validate_max_frequency(id, freq_mhz)?;
+    } else {
+        // Check for all cores
+        let num_cores = get_logical_core_count()?;
+        for id in 0..num_cores {
+            validate_max_frequency(id, freq_mhz)?;
+        }
+    }
+
     let freq_khz_str = (freq_mhz * 1000).to_string();
     let action = |id: u32| {
         let path = format!("/sys/devices/system/cpu/cpu{id}/cpufreq/scaling_max_freq");
@@ -201,6 +333,66 @@ pub fn set_max_frequency(freq_mhz: u32, core_id: Option<u32>) -> Result<()> {
         }
     };
     core_id.map_or_else(|| for_each_cpu_core(action), action)
+}
+
+fn read_sysfs_value_as_u32(path: &str) -> Result<u32> {
+    if !Path::new(path).exists() {
+        return Err(ControlError::NotSupported(format!(
+            "File does not exist: {path}"
+        )));
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|e| ControlError::ReadError(format!("Failed to read {path}: {e}")))?;
+
+    content
+        .trim()
+        .parse::<u32>()
+        .map_err(|e| ControlError::ReadError(format!("Failed to parse value from {path}: {e}")))
+}
+
+fn validate_min_frequency(core_id: u32, new_min_freq_mhz: u32) -> Result<()> {
+    let max_freq_path = format!("/sys/devices/system/cpu/cpu{core_id}/cpufreq/scaling_max_freq");
+
+    if !Path::new(&max_freq_path).exists() {
+        return Ok(());
+    }
+
+    let max_freq_khz = read_sysfs_value_as_u32(&max_freq_path)?;
+    let new_min_freq_khz = new_min_freq_mhz * 1000;
+
+    if new_min_freq_khz > max_freq_khz {
+        return Err(ControlError::InvalidValueError(format!(
+            "Minimum frequency ({} MHz) cannot be higher than maximum frequency ({} MHz) for core {}",
+            new_min_freq_mhz,
+            max_freq_khz / 1000,
+            core_id
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_max_frequency(core_id: u32, new_max_freq_mhz: u32) -> Result<()> {
+    let min_freq_path = format!("/sys/devices/system/cpu/cpu{core_id}/cpufreq/scaling_min_freq");
+
+    if !Path::new(&min_freq_path).exists() {
+        return Ok(());
+    }
+
+    let min_freq_khz = read_sysfs_value_as_u32(&min_freq_path)?;
+    let new_max_freq_khz = new_max_freq_mhz * 1000;
+
+    if new_max_freq_khz < min_freq_khz {
+        return Err(ControlError::InvalidValueError(format!(
+            "Maximum frequency ({} MHz) cannot be lower than minimum frequency ({} MHz) for core {}",
+            new_max_freq_mhz,
+            min_freq_khz / 1000,
+            core_id
+        )));
+    }
+
+    Ok(())
 }
 
 /// Sets the platform profile.
