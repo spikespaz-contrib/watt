@@ -51,8 +51,10 @@ pub fn determine_and_apply_settings(
             override_governor.trim()
         );
 
-        // Apply the override governor setting - validation is handled by set_governor
-        cpu::set_governor(override_governor.trim(), None)?;
+        // Apply the override governor setting
+        try_apply_feature("override governor", override_governor.trim(), || {
+            cpu::set_governor(override_governor.trim(), None)
+        })?;
     }
 
     let selected_profile_config: &ProfileConfig;
