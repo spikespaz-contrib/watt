@@ -1,4 +1,4 @@
-use crate::util::error::ControlError;
+use crate::{config::types::BatteryChargeThresholds, util::error::ControlError};
 use log::{debug, warn};
 use std::{
     fs, io,
@@ -71,7 +71,9 @@ pub struct SupportedBattery {
 /// - No batteries with threshold support are found
 /// - Failed to set thresholds on any battery
 pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) -> Result<()> {
-    validate_thresholds(start_threshold, stop_threshold)?;
+    // Validate thresholds using `BatteryChargeThresholds`
+    let thresholds = BatteryChargeThresholds::new(start_threshold, stop_threshold)
+        .map_err(|e| ControlError::InvalidValueError(e))?;
 
     let power_supply_path = Path::new("/sys/class/power_supply");
     if !power_supply_path.exists() {
@@ -87,29 +89,7 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
         ));
     }
 
-    apply_thresholds_to_batteries(&supported_batteries, start_threshold, stop_threshold)
-}
-
-/// Validates that the threshold values are in acceptable ranges
-fn validate_thresholds(start_threshold: u8, stop_threshold: u8) -> Result<()> {
-    if start_threshold == 0 || stop_threshold == 0 {
-        return Err(ControlError::InvalidValueError(
-            "Thresholds must be greater than 0%".to_string(),
-        ));
-    }
-    if start_threshold >= stop_threshold {
-        return Err(ControlError::InvalidValueError(format!(
-            "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
-        )));
-    }
-
-    if stop_threshold > 100 {
-        return Err(ControlError::InvalidValueError(format!(
-            "Stop threshold ({stop_threshold}) cannot exceed 100%"
-        )));
-    }
-
-    Ok(())
+    apply_thresholds_to_batteries(&supported_batteries, thresholds.start, thresholds.stop)
 }
 
 /// Finds all batteries in the system that support threshold control

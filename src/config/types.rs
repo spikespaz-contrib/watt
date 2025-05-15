@@ -1,11 +1,39 @@
 // Configuration types and structures for superfreq
 use crate::core::TurboSetting;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct BatteryChargeThresholds {
     pub start: u8,
     pub stop: u8,
+}
+
+impl BatteryChargeThresholds {
+    pub fn new(start: u8, stop: u8) -> Result<Self, String> {
+        if start == 0 || stop == 0 {
+            return Err("Thresholds must be greater than 0%".to_string());
+        }
+        if start >= stop {
+            return Err(format!(
+                "Start threshold ({start}) must be less than stop threshold ({stop})"
+            ));
+        }
+        if stop > 100 {
+            return Err(format!("Stop threshold ({stop}) cannot exceed 100%"));
+        }
+
+        Ok(Self { start, stop })
+    }
+}
+
+impl TryFrom<(u8, u8)> for BatteryChargeThresholds {
+    type Error = String;
+
+    fn try_from(values: (u8, u8)) -> Result<Self, Self::Error> {
+        let (start, stop) = values;
+        Self::new(start, stop)
+    }
 }
 
 // Structs for configuration using serde::Deserialize
