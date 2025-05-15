@@ -5,6 +5,16 @@ use std::{fs, io, path::Path, string::ToString};
 
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
 
+// Valid EPB string values
+const VALID_EPB_STRINGS: &[&str] = &[
+    "performance",
+    "balance-performance",
+    "balance_performance", // alternative form
+    "balance-power",
+    "balance_power", // alternative form
+    "power",
+];
+
 // Write a value to a sysfs file
 fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
     let p = path.as_ref();
@@ -106,7 +116,7 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
 }
 
 /// Check if the provided governor is available in the system
-/// Returns a tuple of (is_valid, available_governors) to avoid redundant file reads
+/// Returns a tuple of (`is_valid`, `available_governors`) to avoid redundant file reads
 fn is_governor_valid(governor: &str) -> Result<(bool, Vec<String>)> {
     let governors = get_available_governors()?;
 
@@ -275,24 +285,18 @@ fn validate_epb_value(epb: &str) -> Result<()> {
         )));
     }
 
-    // If not a number, check if it's a recognized string value
-    let valid_strings = [
-        "performance",
-        "balance-performance",
-        "balance-power",
-        "power",
-        // Alternative forms
-        "balance_performance",
-        "balance_power",
-    ];
-
-    if valid_strings.contains(&epb) {
+    // If not a number, check if it's a recognized string value.
+    // This is using case-insensitive comparison
+    if VALID_EPB_STRINGS
+        .iter()
+        .any(|valid| valid.eq_ignore_ascii_case(epb))
+    {
         Ok(())
     } else {
         Err(ControlError::InvalidValueError(format!(
             "Invalid EPB value: '{}'. Must be a number 0-15 or one of: {}",
             epb,
-            valid_strings.join(", ")
+            VALID_EPB_STRINGS.join(", ")
         )))
     }
 }
