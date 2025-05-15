@@ -43,9 +43,9 @@ const THRESHOLD_PATTERNS: &[ThresholdPathPattern] = &[
 ];
 
 /// Represents a battery that supports charge threshold control
-pub struct SupportedBattery {
+pub struct SupportedBattery<'a> {
     pub name: String,
-    pub pattern: ThresholdPathPattern,
+    pub pattern: &'a ThresholdPathPattern,
     pub path: PathBuf,
 }
 
@@ -93,7 +93,7 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
 }
 
 /// Finds all batteries in the system that support threshold control
-fn find_supported_batteries(power_supply_path: &Path) -> Result<Vec<SupportedBattery>> {
+fn find_supported_batteries(power_supply_path: &Path) -> Result<Vec<SupportedBattery<'static>>> {
     let entries = fs::read_dir(power_supply_path).map_err(|e| {
         if e.kind() == io::ErrorKind::PermissionDenied {
             ControlError::PermissionDenied(format!(
@@ -154,14 +154,14 @@ fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
 }
 
 /// Identifies if a battery supports threshold control and which pattern it uses
-fn find_battery_with_threshold_support(ps_path: &Path) -> Option<SupportedBattery> {
+fn find_battery_with_threshold_support(ps_path: &Path) -> Option<SupportedBattery<'static>> {
     for pattern in THRESHOLD_PATTERNS {
         let start_threshold_path = ps_path.join(pattern.start_path);
         let stop_threshold_path = ps_path.join(pattern.stop_path);
         if start_threshold_path.exists() && stop_threshold_path.exists() {
             return Some(SupportedBattery {
                 name: ps_path.file_name()?.to_string_lossy().to_string(),
-                pattern: pattern.clone(),
+                pattern,
                 path: ps_path.to_path_buf(),
             });
         }
@@ -171,7 +171,7 @@ fn find_battery_with_threshold_support(ps_path: &Path) -> Option<SupportedBatter
 
 /// Applies the threshold settings to all supported batteries
 fn apply_thresholds_to_batteries(
-    batteries: &[SupportedBattery],
+    batteries: &[SupportedBattery<'_>],
     start_threshold: u8,
     stop_threshold: u8,
 ) -> Result<()> {
