@@ -37,7 +37,7 @@ impl TryFrom<(u8, u8)> for BatteryChargeThresholds {
 }
 
 // Structs for configuration using serde::Deserialize
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ProfileConfig {
     pub governor: Option<String>,
     pub turbo: Option<TurboSetting>,
@@ -67,7 +67,7 @@ impl Default for ProfileConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Default, Clone)]
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
 pub struct AppConfig {
     #[serde(default)]
     pub charger: ProfileConfig,
@@ -212,7 +212,7 @@ impl From<ProfileConfigToml> for ProfileConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DaemonConfig {
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
@@ -261,7 +261,7 @@ const fn default_adaptive_interval() -> bool {
 }
 
 const fn default_min_poll_interval_sec() -> u64 {
-    1
+     1
 }
 
 const fn default_max_poll_interval_sec() -> u64 {
