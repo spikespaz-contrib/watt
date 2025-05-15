@@ -23,7 +23,9 @@ where
     match apply_fn() {
         Ok(_) => Ok(()),
         Err(e) => {
-            if matches!(e, ControlError::NotSupported(_)) {
+            if matches!(e, ControlError::NotSupported(_))
+                || matches!(e, ControlError::InvalidValueError(_))
+            {
                 warn!(
                     "{feature_name} setting is not supported on this system. Skipping {feature_name} configuration."
                 );
