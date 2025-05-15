@@ -1,7 +1,6 @@
 use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
 use core::str;
-use std::path::PathBuf;
 use std::{fs, io, path::Path, string::ToString};
 
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
@@ -140,7 +139,6 @@ fn get_available_governors() -> Result<Vec<String>> {
     let path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors";
 
     if !Path::new(path).exists() {
-
         return Err(ControlError::NotSupported(
             "Could not determine available governors".to_string(),
         ));

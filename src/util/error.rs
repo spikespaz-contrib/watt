@@ -11,7 +11,6 @@ pub enum ControlError {
     InvalidProfile(String),
     InvalidGovernor(String),
     ParseError(String),
-    ReadError(String),
     PathMissing(String),
 }
 
@@ -46,9 +45,6 @@ impl std::fmt::Display for ControlError {
             }
             Self::ParseError(s) => {
                 write!(f, "Failed to parse value: {s}")
-            }
-            Self::ReadError(s) => {
-                write!(f, "Failed to read sysfs path: {s}")
             }
             Self::PathMissing(s) => {
                 write!(f, "Path missing: {s}")

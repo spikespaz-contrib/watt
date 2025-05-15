@@ -262,24 +262,3 @@ fn is_battery(path: &Path) -> Result<bool> {
 
     Ok(ps_type == "Battery")
 }
-
-/// Check if a directory is writable by attempting to open a temporary file for writing
-fn is_path_writable(path: &Path) -> bool {
-    use std::fs::OpenOptions;
-
-    // Try to create a temporary file to check write permissions
-    // If we're in a container with a read-only mount, this will fail
-    let temp_file_path = path.join(".superfreq_write_test");
-    let result = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(&temp_file_path);
-
-    // Clean up the temporary file if we created it
-    if result.is_ok() {
-        let _ = fs::remove_file(temp_file_path);
-        true
-    } else {
-        false
-    }
-}
