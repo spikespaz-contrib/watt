@@ -154,7 +154,7 @@ impl Default for ProfileConfigToml {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TurboAutoSettings {
     #[serde(default = "default_load_threshold_high")]
     pub load_threshold_high: f32,
@@ -230,7 +230,7 @@ pub struct DaemonConfig {
     pub stats_file_path: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Error,
     Warning,
@@ -261,7 +261,7 @@ const fn default_adaptive_interval() -> bool {
 }
 
 const fn default_min_poll_interval_sec() -> u64 {
-     1
+    1
 }
 
 const fn default_max_poll_interval_sec() -> u64 {

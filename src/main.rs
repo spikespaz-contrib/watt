@@ -370,11 +370,31 @@ fn main() {
             start_threshold,
             stop_threshold,
         }) => {
-            info!(
-                "Setting battery thresholds: start at {start_threshold}%, stop at {stop_threshold}%"
-            );
-            battery::set_battery_charge_thresholds(start_threshold, stop_threshold)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            // Basic validation to provide proper error messages at the CLI level
+            if start_threshold >= stop_threshold {
+                error!(
+                    "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
+                );
+                Err(Box::new(ControlError::InvalidValueError(format!(
+                    "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
+                ))) as Box<dyn std::error::Error>)
+            } else if stop_threshold > 100 {
+                error!("Stop threshold ({stop_threshold}) cannot exceed 100%");
+                Err(Box::new(ControlError::InvalidValueError(format!(
+                    "Stop threshold ({stop_threshold}) cannot exceed 100%"
+                ))) as Box<dyn std::error::Error>)
+            } else if start_threshold == 0 || stop_threshold == 0 {
+                error!("Thresholds must be greater than 0%");
+                Err(Box::new(ControlError::InvalidValueError(
+                    "Thresholds must be greater than 0%".to_string(),
+                )) as Box<dyn std::error::Error>)
+            } else {
+                info!(
+                    "Setting battery thresholds: start at {start_threshold}%, stop at {stop_threshold}%"
+                );
+                battery::set_battery_charge_thresholds(start_threshold, stop_threshold)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }
         }
         Some(Commands::Daemon { verbose }) => daemon::run_daemon(config, verbose),
         Some(Commands::Debug) => cli::debug::run_debug(&config),
