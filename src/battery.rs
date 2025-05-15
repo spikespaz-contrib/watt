@@ -87,13 +87,8 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
         ));
     }
 
-    // Check if the power supply directory is writable
-    // This helps identify permission issues in containerized environments early
-    if !is_path_writable(power_supply_path) {
-        return Err(ControlError::PermissionDenied(
-            "Power supply path exists but is not writable. This may occur in containerized environments.".to_string(),
-        ));
-    }
+    // XXX: Skip checking directory writability since /sys is a virtual filesystem
+    // Individual file writability will be checked by find_battery_with_threshold_support
 
     let supported_batteries = find_supported_batteries(power_supply_path)?;
     if supported_batteries.is_empty() {
