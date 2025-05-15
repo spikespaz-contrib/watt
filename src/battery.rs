@@ -72,8 +72,13 @@ pub struct SupportedBattery<'a> {
 /// - Failed to set thresholds on any battery
 pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) -> Result<()> {
     // Validate thresholds using `BatteryChargeThresholds`
-    let thresholds = BatteryChargeThresholds::new(start_threshold, stop_threshold)
-        .map_err(ControlError::InvalidValueError)?;
+    let thresholds =
+        BatteryChargeThresholds::new(start_threshold, stop_threshold).map_err(|e| match e {
+            crate::config::types::ConfigError::ValidationError(msg) => {
+                ControlError::InvalidValueError(msg)
+            }
+            _ => ControlError::InvalidValueError(format!("Invalid battery threshold values: {e}")),
+        })?;
 
     let power_supply_path = Path::new("/sys/class/power_supply");
     if !power_supply_path.exists() {

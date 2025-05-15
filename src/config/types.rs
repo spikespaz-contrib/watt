@@ -3,24 +3,28 @@ use crate::core::TurboSetting;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct BatteryChargeThresholds {
     pub start: u8,
     pub stop: u8,
 }
 
 impl BatteryChargeThresholds {
-    pub fn new(start: u8, stop: u8) -> Result<Self, String> {
+    pub fn new(start: u8, stop: u8) -> Result<Self, ConfigError> {
         if start == 0 || stop == 0 {
-            return Err("Thresholds must be greater than 0%".to_string());
-        }
-        if start >= stop {
-            return Err(format!(
-                "Start threshold ({start}) must be less than stop threshold ({stop})"
+            return Err(ConfigError::ValidationError(
+                "Thresholds must be greater than 0%".to_string(),
             ));
         }
+        if start >= stop {
+            return Err(ConfigError::ValidationError(format!(
+                "Start threshold ({start}) must be less than stop threshold ({stop})"
+            )));
+        }
         if stop > 100 {
-            return Err(format!("Stop threshold ({stop}) cannot exceed 100%"));
+            return Err(ConfigError::ValidationError(format!(
+                "Stop threshold ({stop}) cannot exceed 100%"
+            )));
         }
 
         Ok(Self { start, stop })
@@ -28,7 +32,7 @@ impl BatteryChargeThresholds {
 }
 
 impl TryFrom<(u8, u8)> for BatteryChargeThresholds {
-    type Error = String;
+    type Error = ConfigError;
 
     fn try_from(values: (u8, u8)) -> Result<Self, Self::Error> {
         let (start, stop) = values;
@@ -85,6 +89,7 @@ pub enum ConfigError {
     TomlError(toml::de::Error),
     NoValidConfigFound,
     HomeDirNotFound,
+    ValidationError(String),
 }
 
 impl From<std::io::Error> for ConfigError {
@@ -106,6 +111,7 @@ impl std::fmt::Display for ConfigError {
             Self::TomlError(e) => write!(f, "TOML parsing error: {e}"),
             Self::NoValidConfigFound => write!(f, "No valid configuration file found."),
             Self::HomeDirNotFound => write!(f, "Could not determine user home directory."),
+            Self::ValidationError(s) => write!(f, "Configuration validation error: {s}"),
         }
     }
 }
