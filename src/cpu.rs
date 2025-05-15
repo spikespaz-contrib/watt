@@ -2,7 +2,11 @@ use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
 use core::str;
 use log::debug;
-use std::{fs, io, path::{Path, PathBuf}, string::ToString};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    string::ToString,
+};
 
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
 
@@ -357,7 +361,7 @@ pub fn get_governor_override() -> Option<String> {
 ///
 /// * `start_threshold` - The battery percentage at which charging should start (typically 0-99)
 /// * `stop_threshold` - The battery percentage at which charging should stop (typically 1-100)
-/// 
+///
 pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) -> Result<()> {
     // Validate threshold values
     if start_threshold >= stop_threshold {
@@ -369,7 +373,7 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
 
     if stop_threshold > 100 {
         return Err(ControlError::InvalidValueError(format!(
-            "Stop threshold ({}) cannot exceed 100%", 
+            "Stop threshold ({}) cannot exceed 100%",
             stop_threshold
         )));
     }
@@ -386,7 +390,7 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
         ThresholdPathPattern {
             description: "ASUS",
             start_path: "charge_control_start_percentage",
-            stop_path: "charge_control_end_percentage",  
+            stop_path: "charge_control_end_percentage",
         },
         // Huawei-specific paths
         ThresholdPathPattern {
@@ -399,7 +403,7 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
     let power_supply_path = Path::new("/sys/class/power_supply");
     if !power_supply_path.exists() {
         return Err(ControlError::NotSupported(
-            "Power supply path not found, battery threshold control not supported".to_string()
+            "Power supply path not found, battery threshold control not supported".to_string(),
         ));
     }
 
@@ -415,22 +419,22 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
     })?;
 
     let mut supported_batteries = Vec::new();
-    
+
     // Scan all power supplies for battery threshold support
     for entry in entries.flatten() {
         let ps_path = entry.path();
         let name = entry.file_name().into_string().unwrap_or_default();
-        
+
         // Skip non-battery devices
         if !is_battery(&ps_path)? {
             continue;
         }
-        
+
         // Try each threshold path pattern for this battery
         for pattern in &threshold_paths {
             let start_threshold_path = ps_path.join(&pattern.start_path);
             let stop_threshold_path = ps_path.join(&pattern.stop_path);
-            
+
             if start_threshold_path.exists() && stop_threshold_path.exists() {
                 // Found a battery with threshold support
                 supported_batteries.push(SupportedBattery {
@@ -438,57 +442,64 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
                     pattern: pattern.clone(),
                     path: ps_path.clone(),
                 });
-                
+
                 // Found a supported pattern, no need to check others for this battery
                 break;
             }
         }
     }
-    
+
     if supported_batteries.is_empty() {
         return Err(ControlError::NotSupported(
-            "No batteries with charge threshold control support found".to_string()
+            "No batteries with charge threshold control support found".to_string(),
         ));
     }
-    
+
     // Apply thresholds to all supported batteries
     let mut errors = Vec::new();
     let mut success_count = 0;
-    
+
     for battery in supported_batteries {
         let start_path = battery.path.join(&battery.pattern.start_path);
         let stop_path = battery.path.join(&battery.pattern.stop_path);
-        
+
         // Attempt to set both thresholds
         match (
             write_sysfs_value(&start_path, &start_threshold.to_string()),
-            write_sysfs_value(&stop_path, &stop_threshold.to_string())
+            write_sysfs_value(&stop_path, &stop_threshold.to_string()),
         ) {
             (Ok(_), Ok(_)) => {
-                debug!("Set {}-{}% charge thresholds for {} battery '{}'", 
-                    start_threshold, stop_threshold, battery.pattern.description, battery.name);
+                debug!(
+                    "Set {}-{}% charge thresholds for {} battery '{}'",
+                    start_threshold, stop_threshold, battery.pattern.description, battery.name
+                );
                 success_count += 1;
-            },
+            }
             (start_result, stop_result) => {
-                let mut error_msg = format!("Failed to set thresholds for {} battery '{}'", 
-                    battery.pattern.description, battery.name);
-                
+                let mut error_msg = format!(
+                    "Failed to set thresholds for {} battery '{}'",
+                    battery.pattern.description, battery.name
+                );
+
                 if let Err(e) = start_result {
                     error_msg.push_str(&format!(": start threshold error: {}", e));
                 }
                 if let Err(e) = stop_result {
                     error_msg.push_str(&format!(": stop threshold error: {}", e));
                 }
-                
+
                 errors.push(error_msg);
             }
         }
     }
-    
+
     if success_count > 0 {
         // As long as we successfully set thresholds on at least one battery, consider it a success
         if !errors.is_empty() {
-            debug!("Partial success setting battery thresholds: {}", errors.join("; "));
+            debug!(
+                "Partial success setting battery thresholds: {}",
+                errors.join("; ")
+            );
         }
         Ok(())
     } else {
@@ -517,15 +528,15 @@ struct SupportedBattery {
 /// Check if a power supply entry is a battery
 fn is_battery(path: &Path) -> Result<bool> {
     let type_path = path.join("type");
-    
+
     if !type_path.exists() {
         return Ok(false);
     }
-    
+
     let ps_type = fs::read_to_string(&type_path)
         .map_err(|_| ControlError::ReadError(format!("Failed to read {}", type_path.display())))?
         .trim()
         .to_string();
-    
+
     Ok(ps_type == "Battery")
 }

@@ -200,7 +200,7 @@ fn apply_battery_charge_thresholds(
 ) -> Result<(), EngineError> {
     // Try profile-specific thresholds first, fall back to global thresholds
     let thresholds = profile_thresholds.or(global_thresholds);
-    
+
     if let Some((start_threshold, stop_threshold)) = thresholds {
         info!("Setting battery charge thresholds: {start_threshold}-{stop_threshold}%");
         match cpu::set_battery_charge_thresholds(start_threshold, stop_threshold) {
@@ -216,7 +216,9 @@ fn apply_battery_charge_thresholds(
                 } else {
                     // For permission errors, provide more helpful message
                     if matches!(e, ControlError::PermissionDenied(_)) {
-                        debug!("Permission denied setting battery thresholds - requires root privileges");
+                        debug!(
+                            "Permission denied setting battery thresholds - requires root privileges"
+                        );
                     }
                     Err(EngineError::ControlError(e))
                 }

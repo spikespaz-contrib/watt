@@ -85,12 +85,12 @@ fn load_and_parse_config(path: &Path) -> Result<AppConfig, ConfigError> {
     // Handle inheritance of values from global to profile configs
     let mut charger_profile = toml_app_config.charger.clone();
     let mut battery_profile = toml_app_config.battery.clone();
-    
+
     // If profile-specific battery thresholds are not set, inherit from global config
     if charger_profile.battery_charge_thresholds.is_none() {
         charger_profile.battery_charge_thresholds = toml_app_config.battery_charge_thresholds;
     }
-    
+
     if battery_profile.battery_charge_thresholds.is_none() {
         battery_profile.battery_charge_thresholds = toml_app_config.battery_charge_thresholds;
     }

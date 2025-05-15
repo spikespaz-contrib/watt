@@ -111,6 +111,26 @@ sudo superfreq set-min-freq 1200 --core-id 0
 sudo superfreq set-max-freq 2800 --core-id 1
 ```
 
+### Battery Management
+
+```bash
+# Set battery charging thresholds to extend battery lifespan
+sudo superfreq set-battery-thresholds 40 80  # Start charging at 40%, stop at 80%
+```
+
+Battery charging thresholds help extend battery longevity by preventing constant
+charging to 100%. Different laptop vendors implement this feature differently,
+but Superfreq attempts to support multiple vendor implementations including:
+
+- Lenovo ThinkPad/IdeaPad (Standard implementation)
+- ASUS laptops
+- Huawei laptops
+- Other devices using the standard Linux power_supply API
+
+Note that battery management is sensitive, and that your mileage may vary.
+Please open an issue if your vendor is not supported, but patches would help
+more than issue reports, as supporting hardware _needs_ hardware.
+
 ## Configuration
 
 Superfreq uses TOML configuration files. Default locations:
@@ -139,6 +159,8 @@ platform_profile = "performance"
 # Min/max frequency in MHz (optional)
 min_freq_mhz = 800
 max_freq_mhz = 3500
+# Optional: Profile-specific battery charge thresholds (overrides global setting)
+# battery_charge_thresholds = [40, 80]  # Start at 40%, stop at 80%
 
 # Settings for when on battery power
 [battery]
@@ -149,6 +171,12 @@ epb = "balance_power"
 platform_profile = "low-power"
 min_freq_mhz = 800
 max_freq_mhz = 2500
+# Optional: Profile-specific battery charge thresholds (overrides global setting)
+# battery_charge_thresholds = [60, 80]  # Start at 60%, stop at 80% (more conservative)
+
+# Global battery charging thresholds (applied to both profiles unless overridden)
+# Start charging at 40%, stop at 80% - extends battery lifespan
+battery_charge_thresholds = [40, 80]
 
 # Daemon configuration
 [daemon]
