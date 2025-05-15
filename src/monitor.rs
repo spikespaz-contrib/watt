@@ -48,7 +48,7 @@ pub fn get_system_info() -> SystemInfo {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CpuTimes {
+pub struct CpuTimes {
     user: u64,
     nice: u64,
     system: u64,
@@ -57,8 +57,6 @@ struct CpuTimes {
     irq: u64,
     softirq: u64,
     steal: u64,
-    guest: u64,
-    guest_nice: u64,
 }
 
 impl CpuTimes {
@@ -145,18 +143,6 @@ fn read_all_cpu_times() -> Result<HashMap<u32, CpuTimes>> {
                     SysMonitorError::ProcStatParseError(format!(
                         "Failed to parse steal time: {}",
                         parts[8]
-                    ))
-                })?,
-                guest: parts[9].parse().map_err(|_| {
-                    SysMonitorError::ProcStatParseError(format!(
-                        "Failed to parse guest time: {}",
-                        parts[9]
-                    ))
-                })?,
-                guest_nice: parts[10].parse().map_err(|_| {
-                    SysMonitorError::ProcStatParseError(format!(
-                        "Failed to parse guest_nice time: {}",
-                        parts[10]
                     ))
                 })?,
             };
@@ -288,7 +274,7 @@ pub fn get_cpu_core_info(
             None
         } else {
             let usage = 100.0 * (1.0 - (idle_diff as f32 / total_diff as f32));
-            Some(usage.max(0.0).min(100.0)) // clamp between 0 and 100
+            Some(usage.clamp(0.0, 100.0)) // clamp between 0 and 100
         }
     };
 

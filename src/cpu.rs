@@ -432,8 +432,8 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
 
         // Try each threshold path pattern for this battery
         for pattern in &threshold_paths {
-            let start_threshold_path = ps_path.join(&pattern.start_path);
-            let stop_threshold_path = ps_path.join(&pattern.stop_path);
+            let start_threshold_path = ps_path.join(pattern.start_path);
+            let stop_threshold_path = ps_path.join(pattern.stop_path);
 
             if start_threshold_path.exists() && stop_threshold_path.exists() {
                 // Found a battery with threshold support
@@ -460,8 +460,8 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
     let mut success_count = 0;
 
     for battery in supported_batteries {
-        let start_path = battery.path.join(&battery.pattern.start_path);
-        let stop_path = battery.path.join(&battery.pattern.stop_path);
+        let start_path = battery.path.join(battery.pattern.start_path);
+        let stop_path = battery.path.join(battery.pattern.stop_path);
 
         // Attempt to set both thresholds
         match (
