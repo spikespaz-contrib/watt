@@ -1,6 +1,7 @@
 use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
 use core::str;
+use std::path::PathBuf;
 use std::{fs, io, path::Path, string::ToString};
 
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
@@ -18,12 +19,15 @@ const VALID_EPB_STRINGS: &[&str] = &[
 // Write a value to a sysfs file
 fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
     let p = path.as_ref();
+
     fs::write(p, value).map_err(|e| {
         let error_msg = format!("Path: {:?}, Value: '{}', Error: {}", p.display(), value, e);
-        if e.kind() == io::ErrorKind::PermissionDenied {
-            ControlError::PermissionDenied(error_msg)
-        } else {
-            ControlError::WriteError(error_msg)
+        match e.kind() {
+            io::ErrorKind::PermissionDenied => ControlError::PermissionDenied(error_msg),
+            io::ErrorKind::NotFound => {
+                ControlError::PathMissing(format!("Path '{}' does not exist", p.display()))
+            }
+            _ => ControlError::WriteError(error_msg),
         }
     })
 }
@@ -136,6 +140,7 @@ fn get_available_governors() -> Result<Vec<String>> {
     let path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors";
 
     if !Path::new(path).exists() {
+
         return Err(ControlError::NotSupported(
             "Could not determine available governors".to_string(),
         ));
@@ -487,7 +492,7 @@ const GOVERNOR_OVERRIDE_PATH: &str = "/etc/superfreq/governor_override";
 /// Force a specific CPU governor or reset to automatic mode
 pub fn force_governor(mode: GovernorOverrideMode) -> Result<()> {
     // Create directory if it doesn't exist
-    let dir_path = Path::new("/etc/superfreq");
+    let dir_path = Path::new("/etc/xdg/superfreq");
     if !dir_path.exists() {
         fs::create_dir_all(dir_path).map_err(|e| {
             if e.kind() == io::ErrorKind::PermissionDenied {

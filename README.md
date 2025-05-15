@@ -135,7 +135,7 @@ more than issue reports, as supporting hardware _needs_ hardware.
 
 Superfreq uses TOML configuration files. Default locations:
 
-- `/etc/superfreq/config.toml`
+- `/etc/xdg/superfreq/config.toml`
 - `/etc/superfreq.toml`
 
 You can also specify a custom path by setting the `SUPERFREQ_CONFIG` environment

@@ -5,18 +5,21 @@ inputs: {
   ...
 }: let
   inherit (lib.modules) mkIf;
-  inherit (lib.options) mkOption mkEnableOption;
+  inherit (lib.options) mkOption mkEnableOption mkPackageOption;
   inherit (lib.types) submodule;
+  inherit (lib.lists) optional;
   inherit (lib.meta) getExe;
 
-  cfg = config.programs.superfreq;
-
-  defaultPackage = inputs.self.packages.${pkgs.stdenv.system}.default;
+  cfg = config.services.superfreq;
 
   format = pkgs.formats.toml {};
+  cfgFile = format.generate "superfreq-config.toml" cfg.settings;
 in {
-  options.programs.superfreq = {
+  options.services.superfreq = {
     enable = mkEnableOption "Automatic CPU speed & power optimizer for Linux";
+    package = mkPackageOption inputs.self.packages.${pkgs.stdenv.system} "superfreq" {
+      pkgsText = "self.packages.\${pkgs.stdenv.system}";
+    };
 
     settings = mkOption {
       default = {};
@@ -26,23 +29,18 @@ in {
   };
 
   config = mkIf cfg.enable {
-    environment.systemPackages = [defaultPackage];
+    environment.systemPackages = [cfg.package];
 
-    systemd = {
-      packages = [defaultPackage];
-      services.superfreq = {
-        wantedBy = ["multi-user.target"];
-        serviceConfig = let
-          cfgFile = format.generate "superfreq-config.toml" cfg.settings;
-        in {
-          Environment = ["SUPERFREQ_CONFIG=${cfgFile}"];
-          WorkingDirectory = "";
-          ExecStart = "${getExe defaultPackage} daemon --verbose";
-          Restart = "on-failure";
+    systemd.services.superfreq = {
+      wantedBy = ["multi-user.target"];
+      serviceConfig = {
+        Environment = optional (cfg.settings != {}) ["SUPERFREQ_CONFIG=${cfgFile}"];
+        WorkingDirectory = "";
+        ExecStart = "${getExe cfg.package} daemon --verbose";
+        Restart = "on-failure";
 
-          RuntimeDirectory = "superfreq";
-          RuntimeDirectoryMode = "0755";
-        };
+        RuntimeDirectory = "superfreq";
+        RuntimeDirectoryMode = "0755";
       };
     };
 
@@ -55,9 +53,9 @@ in {
         '';
       }
       {
-        assertion = !config.programs.auto-cpufreq.enable;
+        assertion = !config.services.auto-cpufreq.enable;
         message = ''
-          You have set programs.auto-cpufreq.enable = true;
+          You have set services.auto-cpufreq.enable = true;
           which conflicts with Superfreq.
         '';
       }

@@ -390,25 +390,41 @@ pub fn get_all_cpu_core_info() -> Result<Vec<CpuCoreInfo>> {
 }
 
 pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
-    // FIXME: Assume global settings can be read from cpu0 or are consistent.
-    // This might not work properly for heterogeneous systems (e.g. big.LITTLE)
-    let cpufreq_base_path = Path::new("/sys/devices/system/cpu/cpu0/cpufreq/");
+    // Find a valid CPU to read global settings from
+    // Try cpu0 first, then fall back to any available CPU with cpufreq
+    let mut cpufreq_base_path_buf = PathBuf::from("/sys/devices/system/cpu/cpu0/cpufreq/");
+
+    if !cpufreq_base_path_buf.exists() {
+        let core_count = get_logical_core_count().unwrap_or_else(|e| {
+            eprintln!("Warning: {e}");
+            0
+        });
+        let path = (0..core_count)
+            .map(|i| PathBuf::from(format!("/sys/devices/system/cpu/cpu{i}/cpufreq/")))
+            .find(|path| path.exists());
+        if let Some(test_path_buf) = path {
+            cpufreq_base_path_buf = test_path_buf;
+        }
+    }
+
     let turbo_status_path = Path::new("/sys/devices/system/cpu/intel_pstate/no_turbo");
     let boost_path = Path::new("/sys/devices/system/cpu/cpufreq/boost");
-    let current_governor = if cpufreq_base_path.join("scaling_governor").exists() {
-        read_sysfs_file_trimmed(cpufreq_base_path.join("scaling_governor")).ok()
+
+    let current_governor = if cpufreq_base_path_buf.join("scaling_governor").exists() {
+        read_sysfs_file_trimmed(cpufreq_base_path_buf.join("scaling_governor")).ok()
     } else {
         None
     };
 
-    let available_governors = if cpufreq_base_path
+    let available_governors = if cpufreq_base_path_buf
         .join("scaling_available_governors")
         .exists()
     {
-        read_sysfs_file_trimmed(cpufreq_base_path.join("scaling_available_governors")).map_or_else(
-            |_| vec![],
-            |s| s.split_whitespace().map(String::from).collect(),
-        )
+        read_sysfs_file_trimmed(cpufreq_base_path_buf.join("scaling_available_governors"))
+            .map_or_else(
+                |_| vec![],
+                |s| s.split_whitespace().map(String::from).collect(),
+            )
     } else {
         vec![]
     };
@@ -424,17 +440,16 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
     } else {
         None
     };
+
     // EPP (Energy Performance Preference)
     let energy_perf_pref =
-        read_sysfs_file_trimmed(cpufreq_base_path.join("energy_performance_preference")).ok();
+        read_sysfs_file_trimmed(cpufreq_base_path_buf.join("energy_performance_preference")).ok();
 
     // EPB (Energy Performance Bias)
     let energy_perf_bias =
-        read_sysfs_file_trimmed(cpufreq_base_path.join("energy_performance_bias")).ok();
+        read_sysfs_file_trimmed(cpufreq_base_path_buf.join("energy_performance_bias")).ok();
 
     let platform_profile = read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile").ok();
-    let _platform_profile_choices =
-        read_sysfs_file_trimmed("/sys/firmware/acpi/platform_profile_choices").ok();
 
     // Calculate average CPU temperature from the core temperatures
     let average_temperature_celsius = if cpu_cores.is_empty() {
@@ -458,6 +473,7 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
         }
     };
 
+    // Return the constructed CpuGlobalInfo
     CpuGlobalInfo {
         current_governor,
         available_governors,

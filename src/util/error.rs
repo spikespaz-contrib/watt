@@ -9,6 +9,10 @@ pub enum ControlError {
     NotSupported(String),
     PermissionDenied(String),
     InvalidProfile(String),
+    InvalidGovernor(String),
+    ParseError(String),
+    ReadError(String),
+    PathMissing(String),
 }
 
 impl From<io::Error> for ControlError {
@@ -36,6 +40,18 @@ impl std::fmt::Display for ControlError {
                     f,
                     "Invalid platform control profile {s} supplied, please provide a valid one."
                 )
+            }
+            Self::InvalidGovernor(s) => {
+                write!(f, "Invalid governor: {s}")
+            }
+            Self::ParseError(s) => {
+                write!(f, "Failed to parse value: {s}")
+            }
+            Self::ReadError(s) => {
+                write!(f, "Failed to read sysfs path: {s}")
+            }
+            Self::PathMissing(s) => {
+                write!(f, "Path missing: {s}")
             }
         }
     }

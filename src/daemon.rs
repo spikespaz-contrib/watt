@@ -65,7 +65,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
         Some(path)
     } else {
         // Check standard config paths
-        let default_paths = ["/etc/superfreq/config.toml", "/etc/superfreq.toml"];
+        let default_paths = ["/etc/xdg/superfreq/config.toml", "/etc/superfreq.toml"];
 
         default_paths
             .iter()
