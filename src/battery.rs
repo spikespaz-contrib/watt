@@ -95,7 +95,14 @@ fn find_supported_batteries(power_supply_path: &Path) -> Result<Vec<SupportedBat
     })?;
 
     let mut supported_batteries = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                warn!("Failed to read power-supply entry: {e}");
+                continue;
+            }
+        };
         let ps_path = entry.path();
         if is_battery(&ps_path)? {
             if let Some(battery) = find_battery_with_threshold_support(&ps_path) {
