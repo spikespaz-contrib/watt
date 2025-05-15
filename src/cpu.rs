@@ -257,12 +257,10 @@ fn validate_epb_value(epb: &str) -> Result<()> {
     if let Ok(value) = epb.parse::<u8>() {
         if value <= 15 {
             return Ok(());
-        } else {
-            return Err(ControlError::InvalidValueError(format!(
-                "EPB numeric value must be between 0 and 15, got {}",
-                value
-            )));
         }
+        return Err(ControlError::InvalidValueError(format!(
+            "EPB numeric value must be between 0 and 15, got {value}"
+        )));
     }
 
     // If not a number, check if it's a recognized string value

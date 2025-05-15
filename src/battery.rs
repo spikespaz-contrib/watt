@@ -168,10 +168,7 @@ fn path_exists_and_writable(path: &Path) -> bool {
     }
 
     // Try to open the file with write access to verify write permission
-    match fs::OpenOptions::new().write(true).open(path) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    fs::OpenOptions::new().write(true).open(path).is_ok()
 }
 
 /// Identifies if a battery supports threshold control and which pattern it uses

@@ -396,7 +396,11 @@ fn main() {
             // Get available platform profiles and validate early if possible
             match cpu::get_platform_profiles() {
                 Ok(available_profiles) => {
-                    if !available_profiles.contains(&profile) {
+                    if available_profiles.contains(&profile) {
+                        info!("Setting platform profile to '{profile}'");
+                        cpu::set_platform_profile(&profile)
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                    } else {
                         error!(
                             "Invalid platform profile: '{}'. Available profiles: {}",
                             profile,
@@ -407,10 +411,6 @@ fn main() {
                             profile,
                             available_profiles.join(", ")
                         ))) as Box<dyn std::error::Error>)
-                    } else {
-                        info!("Setting platform profile to '{}'", profile);
-                        cpu::set_platform_profile(&profile)
-                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
                     }
                 }
                 Err(_) => {

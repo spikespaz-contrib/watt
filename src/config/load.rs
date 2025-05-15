@@ -84,14 +84,17 @@ fn load_and_parse_config(path: &Path) -> Result<AppConfig, ConfigError> {
     let mut charger_profile = toml_app_config.charger.clone();
     let mut battery_profile = toml_app_config.battery.clone();
 
-    // If profile-specific battery thresholds are not set, inherit from global config
-    if charger_profile.battery_charge_thresholds.is_none() {
-        charger_profile.battery_charge_thresholds =
-            toml_app_config.battery_charge_thresholds.clone();
-    }
+    // Clone global battery_charge_thresholds once if it exists
+    if let Some(global_thresholds) = toml_app_config.battery_charge_thresholds {
+        // Apply to charger profile if not already set
+        if charger_profile.battery_charge_thresholds.is_none() {
+            charger_profile.battery_charge_thresholds = Some(global_thresholds.clone());
+        }
 
-    if battery_profile.battery_charge_thresholds.is_none() {
-        battery_profile.battery_charge_thresholds = toml_app_config.battery_charge_thresholds;
+        // Apply to battery profile if not already set
+        if battery_profile.battery_charge_thresholds.is_none() {
+            battery_profile.battery_charge_thresholds = Some(global_thresholds);
+        }
     }
 
     // Convert AppConfigToml to AppConfig
