@@ -119,7 +119,7 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 // Intermediate structs for TOML parsing
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ProfileConfigToml {
     pub governor: Option<String>,
     pub turbo: Option<String>, // "always", "auto", "never"
@@ -132,7 +132,7 @@ pub struct ProfileConfigToml {
     pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct AppConfigToml {
     #[serde(default)]
     pub charger: ProfileConfigToml,
@@ -286,7 +286,7 @@ const fn default_stats_file_path() -> Option<String> {
     None
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DaemonConfigToml {
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
