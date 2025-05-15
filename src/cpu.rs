@@ -487,7 +487,7 @@ pub fn get_platform_profiles() -> Result<Vec<String>> {
 }
 
 /// Path for storing the governor override state
-const GOVERNOR_OVERRIDE_PATH: &str = "/etc/superfreq/governor_override";
+const GOVERNOR_OVERRIDE_PATH: &str = "/etc/xdg/superfreq/governor_override";
 
 /// Force a specific CPU governor or reset to automatic mode
 pub fn force_governor(mode: GovernorOverrideMode) -> Result<()> {
