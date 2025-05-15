@@ -176,6 +176,7 @@ max_freq_mhz = 2500
 
 # Global battery charging thresholds (applied to both profiles unless overridden)
 # Start charging at 40%, stop at 80% - extends battery lifespan
+# NOTE: Profile-specific thresholds (in [charger] or [battery] sections) take precedence over this global setting
 battery_charge_thresholds = [40, 80]
 
 # Daemon configuration
