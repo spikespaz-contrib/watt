@@ -78,8 +78,8 @@ pub fn determine_and_apply_settings(
             // No batteries means desktop/server, always on AC
             true
         } else {
-            // At least one battery exists, check if it's on AC
-            report.batteries.first().is_some_and(|b| b.ac_connected)
+            // Check if any battery reports AC connected
+            report.batteries.iter().any(|b| b.ac_connected)
         };
 
         if on_ac_power {

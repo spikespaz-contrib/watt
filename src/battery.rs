@@ -73,7 +73,7 @@ pub struct SupportedBattery {
 pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) -> Result<()> {
     // Validate thresholds using `BatteryChargeThresholds`
     let thresholds = BatteryChargeThresholds::new(start_threshold, stop_threshold)
-        .map_err(|e| ControlError::InvalidValueError(e))?;
+        .map_err(ControlError::InvalidValueError)?;
 
     let power_supply_path = Path::new("/sys/class/power_supply");
     if !power_supply_path.exists() {
