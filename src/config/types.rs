@@ -11,9 +11,9 @@ pub struct BatteryChargeThresholds {
 
 impl BatteryChargeThresholds {
     pub fn new(start: u8, stop: u8) -> Result<Self, ConfigError> {
-        if start == 0 || stop == 0 {
+        if stop == 0 {
             return Err(ConfigError::ValidationError(
-                "Thresholds must be greater than 0%".to_string(),
+                "Stop threshold must be greater than 0%".to_string(),
             ));
         }
         if start >= stop {
