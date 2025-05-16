@@ -11,6 +11,61 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+/// Calculate optimal polling interval based on system conditions and history
+fn compute_new(
+    base_interval: u64,
+    min_interval: u64,
+    max_interval: u64,
+    cpu_volatility: f32,
+    temp_volatility: f32,
+    battery_discharge_rate: Option<f32>,
+    last_user_activity: Duration,
+    is_system_idle: bool,
+    on_battery: bool,
+) -> u64 {
+    // Start with base interval
+    let mut adjusted_interval = base_interval;
+
+    // If we're on battery, we want to be more aggressive about saving power
+    if on_battery {
+        // Apply a multiplier based on battery discharge rate
+        if let Some(discharge_rate) = battery_discharge_rate {
+            if discharge_rate > 20.0 {
+                // High discharge rate - increase polling interval significantly
+                adjusted_interval = (adjusted_interval as f32 * 3.0) as u64;
+            } else if discharge_rate > 10.0 {
+                // Moderate discharge - double polling interval
+                adjusted_interval *= 2;
+            } else {
+                // Low discharge rate - increase by 50%
+                adjusted_interval = (adjusted_interval as f32 * 1.5) as u64;
+            }
+        } else {
+            // If we don't know discharge rate, use a conservative multiplier
+            adjusted_interval *= 2;
+        }
+    }
+
+    // Adjust for system idleness
+    if is_system_idle {
+        // If the system has been idle for a while, increase interval
+        let idle_time = last_user_activity.as_secs();
+        if idle_time > 300 {
+            // 5 minutes
+            adjusted_interval = (adjusted_interval as f32 * 2.0) as u64;
+        }
+    }
+
+    // Adjust for CPU/temperature volatility
+    // If either CPU usage or temperature is changing rapidly, decrease interval
+    if cpu_volatility > 10.0 || temp_volatility > 2.0 {
+        adjusted_interval = (adjusted_interval as f32 * 0.5) as u64;
+    }
+
+    // Ensure interval stays within configured bounds
+    adjusted_interval.clamp(min_interval, max_interval)
+}
+
 /// Tracks historical system data for advanced adaptive polling
 struct SystemHistory {
     /// Last several CPU usage measurements
@@ -214,50 +269,17 @@ impl SystemHistory {
         let min_interval = config.daemon.min_poll_interval_sec;
         let max_interval = config.daemon.max_poll_interval_sec;
 
-        // Start with base interval
-        let mut adjusted_interval = base_interval;
-
-        // If we're on battery, we want to be more aggressive about saving power
-        if on_battery {
-            // Apply a multiplier based on battery discharge rate
-            if let Some(discharge_rate) = self.battery_discharge_rate {
-                if discharge_rate > 20.0 {
-                    // High discharge rate - increase polling interval significantly
-                    adjusted_interval = (adjusted_interval as f32 * 3.0) as u64;
-                } else if discharge_rate > 10.0 {
-                    // Moderate discharge - double polling interval
-                    adjusted_interval *= 2;
-                } else {
-                    // Low discharge rate - increase by 50%
-                    adjusted_interval = (adjusted_interval as f32 * 1.5) as u64;
-                }
-            } else {
-                // If we don't know discharge rate, use a conservative multiplier
-                adjusted_interval *= 2;
-            }
-        }
-
-        // Adjust for system idleness
-        if self.is_system_idle() {
-            // If the system has been idle for a while, increase interval
-            let idle_time = self.last_user_activity.elapsed().as_secs();
-            if idle_time > 300 {
-                // 5 minutes
-                adjusted_interval = (adjusted_interval as f32 * 2.0) as u64;
-            }
-        }
-
-        // Adjust for CPU/temperature volatility
-        let cpu_volatility = self.get_cpu_volatility();
-        let temp_volatility = self.get_temperature_volatility();
-
-        // If either CPU usage or temperature is changing rapidly, decrease interval
-        if cpu_volatility > 10.0 || temp_volatility > 2.0 {
-            adjusted_interval = (adjusted_interval as f32 * 0.5) as u64;
-        }
-
-        // Ensure interval stays within configured bounds
-        adjusted_interval.clamp(min_interval, max_interval)
+        compute_new(
+            base_interval,
+            min_interval,
+            max_interval,
+            self.get_cpu_volatility(),
+            self.get_temperature_volatility(),
+            self.battery_discharge_rate,
+            self.last_user_activity.elapsed(),
+            self.is_system_idle(),
+            on_battery,
+        )
     }
 }
 
