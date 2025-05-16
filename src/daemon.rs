@@ -411,6 +411,12 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                             - ((current_poll_interval - optimal_interval) / 2).max(1);
                     }
 
+                    // Make sure that we respect the (user) configured min and max limits
+                    current_poll_interval = current_poll_interval.clamp(
+                        config.daemon.min_poll_interval_sec,
+                        config.daemon.max_poll_interval_sec,
+                    );
+
                     debug!("Adaptive polling: set interval to {current_poll_interval}s");
                 } else {
                     // If adaptive polling is disabled, still apply battery-saving adjustment
