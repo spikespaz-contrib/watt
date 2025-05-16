@@ -11,25 +11,37 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// Calculate optimal polling interval based on system conditions and history
-fn compute_new(
+/// Parameters for computing optimal polling interval
+struct IntervalParams {
+    /// Base polling interval in seconds
     base_interval: u64,
+    /// Minimum allowed polling interval in seconds
     min_interval: u64,
+    /// Maximum allowed polling interval in seconds
     max_interval: u64,
+    /// How rapidly CPU usage is changing
     cpu_volatility: f32,
+    /// How rapidly temperature is changing
     temp_volatility: f32,
+    /// Battery discharge rate in %/hour if available
     battery_discharge_rate: Option<f32>,
+    /// Time since last detected user activity
     last_user_activity: Duration,
+    /// Whether the system appears to be idle
     is_system_idle: bool,
+    /// Whether the system is running on battery power
     on_battery: bool,
-) -> u64 {
+}
+
+/// Calculate optimal polling interval based on system conditions and history
+fn compute_new(params: &IntervalParams) -> u64 {
     // Start with base interval
-    let mut adjusted_interval = base_interval;
+    let mut adjusted_interval = params.base_interval;
 
     // If we're on battery, we want to be more aggressive about saving power
-    if on_battery {
+    if params.on_battery {
         // Apply a multiplier based on battery discharge rate
-        if let Some(discharge_rate) = battery_discharge_rate {
+        if let Some(discharge_rate) = params.battery_discharge_rate {
             if discharge_rate > 20.0 {
                 // High discharge rate - increase polling interval significantly
                 adjusted_interval = (adjusted_interval as f32 * 3.0) as u64;
@@ -47,9 +59,9 @@ fn compute_new(
     }
 
     // Adjust for system idleness
-    if is_system_idle {
+    if params.is_system_idle {
         // If the system has been idle for a while, increase interval
-        let idle_time = last_user_activity.as_secs();
+        let idle_time = params.last_user_activity.as_secs();
         if idle_time > 300 {
             // 5 minutes
             adjusted_interval = (adjusted_interval as f32 * 2.0) as u64;
@@ -58,12 +70,12 @@ fn compute_new(
 
     // Adjust for CPU/temperature volatility
     // If either CPU usage or temperature is changing rapidly, decrease interval
-    if cpu_volatility > 10.0 || temp_volatility > 2.0 {
+    if params.cpu_volatility > 10.0 || params.temp_volatility > 2.0 {
         adjusted_interval = (adjusted_interval as f32 * 0.5) as u64;
     }
 
     // Ensure interval stays within configured bounds
-    adjusted_interval.clamp(min_interval, max_interval)
+    adjusted_interval.clamp(params.min_interval, params.max_interval)
 }
 
 /// Tracks historical system data for advanced adaptive polling
@@ -265,21 +277,19 @@ impl SystemHistory {
 
     /// Calculate optimal polling interval based on system conditions
     fn calculate_optimal_interval(&self, config: &AppConfig, on_battery: bool) -> u64 {
-        let base_interval = config.daemon.poll_interval_sec;
-        let min_interval = config.daemon.min_poll_interval_sec;
-        let max_interval = config.daemon.max_poll_interval_sec;
-
-        compute_new(
-            base_interval,
-            min_interval,
-            max_interval,
-            self.get_cpu_volatility(),
-            self.get_temperature_volatility(),
-            self.battery_discharge_rate,
-            self.last_user_activity.elapsed(),
-            self.is_system_idle(),
+        let params = IntervalParams {
+            base_interval: config.daemon.poll_interval_sec,
+            min_interval: config.daemon.min_poll_interval_sec,
+            max_interval: config.daemon.max_poll_interval_sec,
+            cpu_volatility: self.get_cpu_volatility(),
+            temp_volatility: self.get_temperature_volatility(),
+            battery_discharge_rate: self.battery_discharge_rate,
+            last_user_activity: self.last_user_activity.elapsed(),
+            is_system_idle: self.is_system_idle(),
             on_battery,
-        )
+        };
+
+        compute_new(&params)
     }
 }
 
