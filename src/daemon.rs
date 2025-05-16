@@ -4,6 +4,7 @@ use crate::core::SystemReport;
 use crate::engine;
 use crate::monitor;
 use log::{LevelFilter, debug, error, info, warn};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -13,9 +14,9 @@ use std::time::{Duration, Instant};
 /// Tracks historical system data for advanced adaptive polling
 struct SystemHistory {
     /// Last several CPU usage measurements
-    cpu_usage_history: Vec<f32>,
+    cpu_usage_history: VecDeque<f32>,
     /// Last several temperature readings
-    temperature_history: Vec<f32>,
+    temperature_history: VecDeque<f32>,
     /// Time of last detected user activity
     last_user_activity: Instant,
     /// Previous battery percentage (to calculate discharge rate)
@@ -35,8 +36,8 @@ struct SystemHistory {
 impl SystemHistory {
     fn new() -> Self {
         Self {
-            cpu_usage_history: Vec::with_capacity(5),
-            temperature_history: Vec::with_capacity(5),
+            cpu_usage_history: VecDeque::with_capacity(5),
+            temperature_history: VecDeque::with_capacity(5),
             last_user_activity: Instant::now(),
             last_battery_percentage: None,
             last_battery_timestamp: None,
@@ -68,9 +69,9 @@ impl SystemHistory {
 
                 // Keep only the last 5 measurements
                 if self.cpu_usage_history.len() >= 5 {
-                    self.cpu_usage_history.remove(0);
+                    self.cpu_usage_history.pop_front();
                 }
-                self.cpu_usage_history.push(avg_usage);
+                self.cpu_usage_history.push_back(avg_usage);
 
                 // Update last_user_activity if CPU usage indicates activity
                 // Consider significant CPU usage or sudden change as user activity
@@ -89,9 +90,9 @@ impl SystemHistory {
         // Update temperature history
         if let Some(temp) = report.cpu_global.average_temperature_celsius {
             if self.temperature_history.len() >= 5 {
-                self.temperature_history.remove(0);
+                self.temperature_history.pop_front();
             }
-            self.temperature_history.push(temp);
+            self.temperature_history.push_back(temp);
 
             // Significant temperature increase can indicate user activity
             if self.temperature_history.len() > 1 {
