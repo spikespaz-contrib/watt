@@ -32,22 +32,27 @@ pub fn load_config_from_path(specific_path: Option<&str>) -> Result<AppConfig, C
         )));
     }
 
-    // Otherwise try the standard paths
-    let mut config_paths: Vec<PathBuf> = Vec::new();
-
-    // User-specific path
-    if let Some(home_dir) = dirs::home_dir() {
-        let user_config_path = home_dir.join(".config/superfreq/config.toml");
-        config_paths.push(user_config_path);
-    } else {
+    // Check for SUPERFREQ_CONFIG environment variable
+    if let Ok(env_path) = std::env::var("SUPERFREQ_CONFIG") {
+        let env_path = Path::new(&env_path);
+        if env_path.exists() {
+            println!(
+                "Loading config from SUPERFREQ_CONFIG: {}",
+                env_path.display()
+            );
+            return load_and_parse_config(env_path);
+        }
         eprintln!(
-            "Warning: Could not determine home directory. User-specific config will not be loaded."
+            "Warning: Config file specified by SUPERFREQ_CONFIG not found: {}",
+            env_path.display()
         );
     }
 
     // System-wide paths
-    config_paths.push(PathBuf::from("/etc/xdg/superfreq/config.toml"));
-    config_paths.push(PathBuf::from("/etc/superfreq.toml"));
+    let config_paths = vec![
+        PathBuf::from("/etc/xdg/superfreq/config.toml"),
+        PathBuf::from("/etc/superfreq.toml"),
+    ];
 
     for path in config_paths {
         if path.exists() {

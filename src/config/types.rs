@@ -87,8 +87,6 @@ pub struct AppConfig {
 pub enum ConfigError {
     IoError(std::io::Error),
     TomlError(toml::de::Error),
-    NoValidConfigFound,
-    HomeDirNotFound,
     ValidationError(String),
 }
 
@@ -109,8 +107,6 @@ impl std::fmt::Display for ConfigError {
         match self {
             Self::IoError(e) => write!(f, "I/O error: {e}"),
             Self::TomlError(e) => write!(f, "TOML parsing error: {e}"),
-            Self::NoValidConfigFound => write!(f, "No valid configuration file found."),
-            Self::HomeDirNotFound => write!(f, "Could not determine user home directory."),
             Self::ValidationError(s) => write!(f, "Configuration validation error: {s}"),
         }
     }
