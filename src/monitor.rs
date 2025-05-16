@@ -399,11 +399,13 @@ pub fn get_cpu_global_info(cpu_cores: &[CpuCoreInfo]) -> CpuGlobalInfo {
             eprintln!("Warning: {e}");
             0
         });
-        let path = (0..core_count)
-            .map(|i| PathBuf::from(format!("/sys/devices/system/cpu/cpu{i}/cpufreq/")))
-            .find(|path| path.exists());
-        if let Some(test_path_buf) = path {
-            cpufreq_base_path_buf = test_path_buf;
+
+        for i in 0..core_count {
+            let test_path = PathBuf::from(format!("/sys/devices/system/cpu/cpu{i}/cpufreq/"));
+            if test_path.exists() {
+                cpufreq_base_path_buf = test_path;
+                break; // Exit the loop as soon as we find a valid path
+            }
         }
     }
 
