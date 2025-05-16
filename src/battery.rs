@@ -167,10 +167,12 @@ fn read_sysfs_value(path: impl AsRef<Path>) -> Result<String> {
     fs::read_to_string(p)
         .map_err(|e| {
             let error_msg = format!("Path: {:?}, Error: {}", p.display(), e);
-            if e.kind() == io::ErrorKind::PermissionDenied {
-                ControlError::PermissionDenied(error_msg)
-            } else {
-                ControlError::ReadError(error_msg)
+            match e.kind() {
+                io::ErrorKind::PermissionDenied => ControlError::PermissionDenied(error_msg),
+                io::ErrorKind::NotFound => {
+                    ControlError::PathMissing(format!("Path '{}' does not exist", p.display()))
+                }
+                _ => ControlError::ReadError(error_msg),
             }
         })
         .map(|s| s.trim().to_string())
@@ -220,7 +222,6 @@ fn apply_thresholds_to_batteries(
         let stop_path = battery.path.join(battery.pattern.stop_path);
 
         // Read current thresholds in case we need to restore them
-        let current_start = read_sysfs_value(&start_path).ok();
         let current_stop = read_sysfs_value(&stop_path).ok();
 
         // Write stop threshold first (must be >= start threshold)
