@@ -23,14 +23,13 @@ where
     match apply_fn() {
         Ok(_) => Ok(()),
         Err(e) => {
-            if matches!(e, ControlError::NotSupported(_))
-                || matches!(e, ControlError::InvalidValueError(_))
-            {
+            if matches!(e, ControlError::NotSupported(_)) {
                 warn!(
                     "{feature_name} setting is not supported on this system. Skipping {feature_name} configuration."
                 );
                 Ok(())
             } else {
+                // Propagate all other errors, including InvalidValueError
                 Err(EngineError::ControlError(e))
             }
         }
