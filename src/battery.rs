@@ -1,4 +1,4 @@
-use crate::{config::types::BatteryChargeThresholds, util::error::ControlError};
+use crate::{config::types::BatteryChargeThresholds, util::error::ControlError, util::sysfs};
 use log::{debug, warn};
 use std::{
     fs, io,
@@ -148,66 +148,6 @@ fn find_supported_batteries(power_supply_path: &Path) -> Result<Vec<SupportedBat
     Ok(supported_batteries)
 }
 
-/// Write a value to a sysfs file
-fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
-    let p = path.as_ref();
-    fs::write(p, value).map_err(|e| {
-        let error_msg = format!("Path: {:?}, Value: '{}', Error: {}", p.display(), value, e);
-        if e.kind() == io::ErrorKind::PermissionDenied {
-            ControlError::PermissionDenied(error_msg)
-        } else {
-            ControlError::WriteError(error_msg)
-        }
-    })
-}
-
-/// Read a value from a sysfs file
-fn read_sysfs_value(path: impl AsRef<Path>) -> Result<String> {
-    let p = path.as_ref();
-    fs::read_to_string(p)
-        .map_err(|e| {
-            let error_msg = format!("Path: {:?}, Error: {}", p.display(), e);
-            match e.kind() {
-                io::ErrorKind::PermissionDenied => ControlError::PermissionDenied(error_msg),
-                io::ErrorKind::NotFound => {
-                    ControlError::PathMissing(format!("Path '{}' does not exist", p.display()))
-                }
-                _ => ControlError::ReadError(error_msg),
-            }
-        })
-        .map(|s| s.trim().to_string())
-}
-
-/// Safely check if a path exists and is writable
-fn path_exists_and_writable(path: &Path) -> bool {
-    if !path.exists() {
-        return false;
-    }
-
-    // Try to open the file with write access to verify write permission
-    fs::OpenOptions::new().write(true).open(path).is_ok()
-}
-
-/// Identifies if a battery supports threshold control and which pattern it uses
-fn find_battery_with_threshold_support(ps_path: &Path) -> Option<SupportedBattery<'static>> {
-    for pattern in THRESHOLD_PATTERNS {
-        let start_threshold_path = ps_path.join(pattern.start_path);
-        let stop_threshold_path = ps_path.join(pattern.stop_path);
-
-        // Ensure both paths exist and are writable before considering this battery supported
-        if path_exists_and_writable(&start_threshold_path)
-            && path_exists_and_writable(&stop_threshold_path)
-        {
-            return Some(SupportedBattery {
-                name: ps_path.file_name()?.to_string_lossy().to_string(),
-                pattern,
-                path: ps_path.to_path_buf(),
-            });
-        }
-    }
-    None
-}
-
 /// Applies the threshold settings to all supported batteries
 fn apply_thresholds_to_batteries(
     batteries: &[SupportedBattery<'_>],
@@ -222,14 +162,14 @@ fn apply_thresholds_to_batteries(
         let stop_path = battery.path.join(battery.pattern.stop_path);
 
         // Read current thresholds in case we need to restore them
-        let current_stop = read_sysfs_value(&stop_path).ok();
+        let current_stop = sysfs::read_sysfs_value(&stop_path).ok();
 
         // Write stop threshold first (must be >= start threshold)
-        let stop_result = write_sysfs_value(&stop_path, &stop_threshold.to_string());
+        let stop_result = sysfs::write_sysfs_value(&stop_path, &stop_threshold.to_string());
 
         // Only proceed to set start threshold if stop threshold was set successfully
         if matches!(stop_result, Ok(())) {
-            let start_result = write_sysfs_value(&start_path, &start_threshold.to_string());
+            let start_result = sysfs::write_sysfs_value(&start_path, &start_threshold.to_string());
 
             match start_result {
                 Ok(()) => {
@@ -242,7 +182,7 @@ fn apply_thresholds_to_batteries(
                 Err(e) => {
                     // Start threshold failed, try to restore the previous stop threshold
                     if let Some(prev_stop) = &current_stop {
-                        let restore_result = write_sysfs_value(&stop_path, prev_stop);
+                        let restore_result = sysfs::write_sysfs_value(&stop_path, prev_stop);
                         if let Err(re) = restore_result {
                             warn!(
                                 "Failed to restore previous stop threshold for battery '{}': {}. Battery may be in an inconsistent state.",
@@ -294,10 +234,29 @@ fn is_battery(path: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    let ps_type = fs::read_to_string(&type_path)
-        .map_err(|_| ControlError::ReadError(format!("Failed to read {}", type_path.display())))?
-        .trim()
-        .to_string();
+    let ps_type = sysfs::read_sysfs_value(&type_path).map_err(|e| {
+        ControlError::ReadError(format!("Failed to read {}: {}", type_path.display(), e))
+    })?;
 
     Ok(ps_type == "Battery")
+}
+
+/// Identifies if a battery supports threshold control and which pattern it uses
+fn find_battery_with_threshold_support(ps_path: &Path) -> Option<SupportedBattery<'static>> {
+    for pattern in THRESHOLD_PATTERNS {
+        let start_threshold_path = ps_path.join(pattern.start_path);
+        let stop_threshold_path = ps_path.join(pattern.stop_path);
+
+        // Ensure both paths exist and are writable before considering this battery supported
+        if sysfs::path_exists_and_writable(&start_threshold_path)
+            && sysfs::path_exists_and_writable(&stop_threshold_path)
+        {
+            return Some(SupportedBattery {
+                name: ps_path.file_name()?.to_string_lossy().to_string(),
+                pattern,
+                path: ps_path.to_path_buf(),
+            });
+        }
+    }
+    None
 }
