@@ -110,10 +110,11 @@ impl SystemHistory {
         if let Some(battery) = report.batteries.first() {
             // Reset when we are charging or have just connected AC
             if battery.ac_connected {
+                // Reset discharge tracking but continue updating the rest of
+                // the history so we still detect activity/load changes on AC.
                 self.battery_discharge_rate = None;
                 self.last_battery_percentage = None;
                 self.last_battery_timestamp = None;
-                return;
             }
 
             if let Some(current_percentage) = battery.capacity_percent {
