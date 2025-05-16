@@ -604,14 +604,17 @@ pub fn get_battery_info(config: &AppConfig) -> Result<Vec<BatteryInfo>> {
 
 /// Check if a battery is likely a peripheral (mouse, keyboard, etc) not a laptop battery
 fn is_peripheral_battery(ps_path: &Path, name: &str) -> bool {
+    // Convert name to lowercase once for case-insensitive matching
+    let name_lower = name.to_lowercase();
+
     // Common peripheral battery names
-    if name.contains("mouse")
-        || name.contains("keyboard")
-        || name.contains("trackpad")
-        || name.contains("gamepad")
-        || name.contains("controller")
-        || name.contains("headset")
-        || name.contains("headphone")
+    if name_lower.contains("mouse")
+        || name_lower.contains("keyboard")
+        || name_lower.contains("trackpad")
+        || name_lower.contains("gamepad")
+        || name_lower.contains("controller")
+        || name_lower.contains("headset")
+        || name_lower.contains("headphone")
     {
         return true;
     }
