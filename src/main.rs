@@ -12,7 +12,7 @@ mod util;
 use crate::config::AppConfig;
 use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
-use clap::Parser;
+use clap::{Parser, value_parser};
 use env_logger::Builder;
 use log::{debug, error, info};
 use std::sync::Once;
@@ -81,8 +81,10 @@ enum Commands {
     /// Set battery charge thresholds to extend battery lifespan
     SetBatteryThresholds {
         /// Percentage at which charging starts (when below this value)
+        #[clap(value_parser = value_parser!(u8).range(0..=99))]
         start_threshold: u8,
         /// Percentage at which charging stops (when it reaches this value)
+        #[clap(value_parser = value_parser!(u8).range(1..=100))]
         stop_threshold: u8,
     },
 }
@@ -409,7 +411,7 @@ fn main() {
             start_threshold,
             stop_threshold,
         }) => {
-            // Basic validation to provide proper error messages at the CLI level
+            // We only need to check if start < stop since the range validation is handled by Clap
             if start_threshold >= stop_threshold {
                 error!(
                     "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
@@ -417,16 +419,6 @@ fn main() {
                 Err(Box::new(ControlError::InvalidValueError(format!(
                     "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
                 ))) as Box<dyn std::error::Error>)
-            } else if stop_threshold > 100 {
-                error!("Stop threshold ({stop_threshold}) cannot exceed 100%");
-                Err(Box::new(ControlError::InvalidValueError(format!(
-                    "Stop threshold ({stop_threshold}) cannot exceed 100%"
-                ))) as Box<dyn std::error::Error>)
-            } else if start_threshold == 0 || stop_threshold == 0 {
-                error!("Thresholds must be greater than 0%");
-                Err(Box::new(ControlError::InvalidValueError(
-                    "Thresholds must be greater than 0%".to_string(),
-                )) as Box<dyn std::error::Error>)
             } else {
                 info!(
                     "Setting battery thresholds: start at {start_threshold}%, stop at {stop_threshold}%"
