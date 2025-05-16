@@ -1,9 +1,47 @@
 // Configuration types and structures for superfreq
 use crate::core::TurboSetting;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct BatteryChargeThresholds {
+    pub start: u8,
+    pub stop: u8,
+}
+
+impl BatteryChargeThresholds {
+    pub fn new(start: u8, stop: u8) -> Result<Self, ConfigError> {
+        if stop == 0 {
+            return Err(ConfigError::ValidationError(
+                "Stop threshold must be greater than 0%".to_string(),
+            ));
+        }
+        if start >= stop {
+            return Err(ConfigError::ValidationError(format!(
+                "Start threshold ({start}) must be less than stop threshold ({stop})"
+            )));
+        }
+        if stop > 100 {
+            return Err(ConfigError::ValidationError(format!(
+                "Stop threshold ({stop}) cannot exceed 100%"
+            )));
+        }
+
+        Ok(Self { start, stop })
+    }
+}
+
+impl TryFrom<(u8, u8)> for BatteryChargeThresholds {
+    type Error = ConfigError;
+
+    fn try_from(values: (u8, u8)) -> Result<Self, Self::Error> {
+        let (start, stop) = values;
+        Self::new(start, stop)
+    }
+}
 
 // Structs for configuration using serde::Deserialize
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ProfileConfig {
     pub governor: Option<String>,
     pub turbo: Option<TurboSetting>,
@@ -13,6 +51,8 @@ pub struct ProfileConfig {
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
     pub turbo_auto_settings: Option<TurboAutoSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
 }
 
 impl Default for ProfileConfig {
@@ -26,26 +66,20 @@ impl Default for ProfileConfig {
             max_freq_mhz: None,     // no override
             platform_profile: None, // no override
             turbo_auto_settings: Some(TurboAutoSettings::default()),
+            battery_charge_thresholds: None,
         }
     }
 }
 
-#[derive(Deserialize, Debug, Default, Clone)]
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
 pub struct AppConfig {
     #[serde(default)]
     pub charger: ProfileConfig,
     #[serde(default)]
     pub battery: ProfileConfig,
-    pub battery_charge_thresholds: Option<(u8, u8)>, // (start_threshold, stop_threshold)
     pub ignored_power_supplies: Option<Vec<String>>,
-    #[serde(default = "default_poll_interval_sec")]
-    pub poll_interval_sec: u64,
     #[serde(default)]
     pub daemon: DaemonConfig,
-}
-
-const fn default_poll_interval_sec() -> u64 {
-    5
 }
 
 // Error type for config loading
@@ -55,6 +89,7 @@ pub enum ConfigError {
     TomlError(toml::de::Error),
     NoValidConfigFound,
     HomeDirNotFound,
+    ValidationError(String),
 }
 
 impl From<std::io::Error> for ConfigError {
@@ -76,6 +111,7 @@ impl std::fmt::Display for ConfigError {
             Self::TomlError(e) => write!(f, "TOML parsing error: {e}"),
             Self::NoValidConfigFound => write!(f, "No valid configuration file found."),
             Self::HomeDirNotFound => write!(f, "Could not determine user home directory."),
+            Self::ValidationError(s) => write!(f, "Configuration validation error: {s}"),
         }
     }
 }
@@ -83,7 +119,7 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 // Intermediate structs for TOML parsing
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ProfileConfigToml {
     pub governor: Option<String>,
     pub turbo: Option<String>, // "always", "auto", "never"
@@ -92,18 +128,19 @@ pub struct ProfileConfigToml {
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct AppConfigToml {
     #[serde(default)]
     pub charger: ProfileConfigToml,
     #[serde(default)]
     pub battery: ProfileConfigToml,
-    pub battery_charge_thresholds: Option<(u8, u8)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
     pub ignored_power_supplies: Option<Vec<String>>,
-    #[serde(default = "default_poll_interval_sec")]
-    pub poll_interval_sec: u64,
     #[serde(default)]
     pub daemon: DaemonConfigToml,
 }
@@ -118,11 +155,12 @@ impl Default for ProfileConfigToml {
             min_freq_mhz: None,
             max_freq_mhz: None,
             platform_profile: None,
+            battery_charge_thresholds: None,
         }
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TurboAutoSettings {
     #[serde(default = "default_load_threshold_high")]
     pub load_threshold_high: f32,
@@ -175,11 +213,12 @@ impl From<ProfileConfigToml> for ProfileConfig {
             max_freq_mhz: toml_config.max_freq_mhz,
             platform_profile: toml_config.platform_profile,
             turbo_auto_settings: Some(TurboAutoSettings::default()),
+            battery_charge_thresholds: toml_config.battery_charge_thresholds,
         }
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DaemonConfig {
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,
@@ -197,7 +236,7 @@ pub struct DaemonConfig {
     pub stats_file_path: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Error,
     Warning,
@@ -217,6 +256,10 @@ impl Default for DaemonConfig {
             stats_file_path: default_stats_file_path(),
         }
     }
+}
+
+const fn default_poll_interval_sec() -> u64 {
+    5
 }
 
 const fn default_adaptive_interval() -> bool {
@@ -243,7 +286,7 @@ const fn default_stats_file_path() -> Option<String> {
     None
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DaemonConfigToml {
     #[serde(default = "default_poll_interval_sec")]
     pub poll_interval_sec: u64,

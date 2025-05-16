@@ -5,7 +5,7 @@ use crate::monitor;
 use std::error::Error;
 use std::fs;
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// Prints comprehensive debug information about the system
 pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
@@ -13,7 +13,6 @@ pub fn run_debug(config: &AppConfig) -> Result<(), Box<dyn Error>> {
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Current date and time
-    let now = SystemTime::now();
     let formatted_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     println!("Timestamp: {formatted_time}");
 

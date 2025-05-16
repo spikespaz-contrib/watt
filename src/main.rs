@@ -1,3 +1,4 @@
+mod battery;
 mod cli;
 mod config;
 mod conflict;
@@ -11,7 +12,7 @@ mod util;
 use crate::config::AppConfig;
 use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
-use clap::Parser;
+use clap::{Parser, value_parser};
 use env_logger::Builder;
 use log::{debug, error, info};
 use std::sync::Once;
@@ -77,6 +78,15 @@ enum Commands {
     },
     /// Set ACPI platform profile
     SetPlatformProfile { profile: String },
+    /// Set battery charge thresholds to extend battery lifespan
+    SetBatteryThresholds {
+        /// Percentage at which charging starts (when below this value)
+        #[clap(value_parser = value_parser!(u8).range(0..=99))]
+        start_threshold: u8,
+        /// Percentage at which charging stops (when it reaches this value)
+        #[clap(value_parser = value_parser!(u8).range(1..=100))]
+        stop_threshold: u8,
+    },
 }
 
 fn main() {
@@ -349,15 +359,74 @@ fn main() {
             cpu::set_epb(&epb, core_id).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
         }
         Some(Commands::SetMinFreq { freq_mhz, core_id }) => {
-            cpu::set_min_frequency(freq_mhz, core_id)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            // Basic validation for reasonable CPU frequency values
+            if let Err(e) = validate_freq(freq_mhz, "Minimum") {
+                error!("{e}");
+                Err(e)
+            } else {
+                cpu::set_min_frequency(freq_mhz, core_id)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }
         }
         Some(Commands::SetMaxFreq { freq_mhz, core_id }) => {
-            cpu::set_max_frequency(freq_mhz, core_id)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            // Basic validation for reasonable CPU frequency values
+            if let Err(e) = validate_freq(freq_mhz, "Maximum") {
+                error!("{e}");
+                Err(e)
+            } else {
+                cpu::set_max_frequency(freq_mhz, core_id)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }
         }
-        Some(Commands::SetPlatformProfile { profile }) => cpu::set_platform_profile(&profile)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
+        Some(Commands::SetPlatformProfile { profile }) => {
+            // Get available platform profiles and validate early if possible
+            match cpu::get_platform_profiles() {
+                Ok(available_profiles) => {
+                    if available_profiles.contains(&profile) {
+                        info!("Setting platform profile to '{profile}'");
+                        cpu::set_platform_profile(&profile)
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                    } else {
+                        error!(
+                            "Invalid platform profile: '{}'. Available profiles: {}",
+                            profile,
+                            available_profiles.join(", ")
+                        );
+                        Err(Box::new(ControlError::InvalidProfile(format!(
+                            "Invalid platform profile: '{}'. Available profiles: {}",
+                            profile,
+                            available_profiles.join(", ")
+                        ))) as Box<dyn std::error::Error>)
+                    }
+                }
+                Err(_) => {
+                    // If we can't get profiles (e.g., feature not supported), pass through to the function
+                    // which will provide appropriate error
+                    cpu::set_platform_profile(&profile)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                }
+            }
+        }
+        Some(Commands::SetBatteryThresholds {
+            start_threshold,
+            stop_threshold,
+        }) => {
+            // We only need to check if start < stop since the range validation is handled by Clap
+            if start_threshold >= stop_threshold {
+                error!(
+                    "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
+                );
+                Err(Box::new(ControlError::InvalidValueError(format!(
+                    "Start threshold ({start_threshold}) must be less than stop threshold ({stop_threshold})"
+                ))) as Box<dyn std::error::Error>)
+            } else {
+                info!(
+                    "Setting battery thresholds: start at {start_threshold}%, stop at {stop_threshold}%"
+                );
+                battery::set_battery_charge_thresholds(start_threshold, stop_threshold)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }
+        }
         Some(Commands::Daemon { verbose }) => daemon::run_daemon(config, verbose),
         Some(Commands::Debug) => cli::debug::run_debug(&config),
         None => {
@@ -403,4 +472,22 @@ fn init_logger() {
 
         debug!("Logger initialized with RUST_LOG={env_log}");
     });
+}
+
+/// Validate CPU frequency input values
+fn validate_freq(freq_mhz: u32, label: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if freq_mhz == 0 {
+        error!("{label} frequency cannot be zero");
+        Err(Box::new(ControlError::InvalidValueError(format!(
+            "{label} frequency cannot be zero"
+        ))) as Box<dyn std::error::Error>)
+    } else if freq_mhz > 10000 {
+        // Extremely high value unlikely to be valid
+        error!("{label} frequency ({freq_mhz} MHz) is unreasonably high");
+        Err(Box::new(ControlError::InvalidValueError(format!(
+            "{label} frequency ({freq_mhz} MHz) is unreasonably high"
+        ))) as Box<dyn std::error::Error>)
+    } else {
+        Ok(())
+    }
 }

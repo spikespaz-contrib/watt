@@ -68,9 +68,7 @@ pub fn load_config_from_path(specific_path: Option<&str>) -> Result<AppConfig, C
     Ok(AppConfig {
         charger: ProfileConfig::from(default_toml_config.charger),
         battery: ProfileConfig::from(default_toml_config.battery),
-        battery_charge_thresholds: default_toml_config.battery_charge_thresholds,
         ignored_power_supplies: default_toml_config.ignored_power_supplies,
-        poll_interval_sec: default_toml_config.poll_interval_sec,
         daemon: DaemonConfig::default(),
     })
 }
@@ -82,13 +80,28 @@ fn load_and_parse_config(path: &Path) -> Result<AppConfig, ConfigError> {
     let toml_app_config =
         toml::from_str::<AppConfigToml>(&contents).map_err(ConfigError::TomlError)?;
 
+    // Handle inheritance of values from global to profile configs
+    let mut charger_profile = toml_app_config.charger.clone();
+    let mut battery_profile = toml_app_config.battery.clone();
+
+    // Clone global battery_charge_thresholds once if it exists
+    if let Some(global_thresholds) = toml_app_config.battery_charge_thresholds {
+        // Apply to charger profile if not already set
+        if charger_profile.battery_charge_thresholds.is_none() {
+            charger_profile.battery_charge_thresholds = Some(global_thresholds.clone());
+        }
+
+        // Apply to battery profile if not already set
+        if battery_profile.battery_charge_thresholds.is_none() {
+            battery_profile.battery_charge_thresholds = Some(global_thresholds);
+        }
+    }
+
     // Convert AppConfigToml to AppConfig
     Ok(AppConfig {
-        charger: ProfileConfig::from(toml_app_config.charger),
-        battery: ProfileConfig::from(toml_app_config.battery),
-        battery_charge_thresholds: toml_app_config.battery_charge_thresholds,
+        charger: ProfileConfig::from(charger_profile),
+        battery: ProfileConfig::from(battery_profile),
         ignored_power_supplies: toml_app_config.ignored_power_supplies,
-        poll_interval_sec: toml_app_config.poll_interval_sec,
         daemon: DaemonConfig {
             poll_interval_sec: toml_app_config.daemon.poll_interval_sec,
             adaptive_interval: toml_app_config.daemon.adaptive_interval,

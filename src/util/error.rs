@@ -4,13 +4,13 @@ use std::io;
 pub enum ControlError {
     Io(io::Error),
     WriteError(String),
+    ReadError(String),
     InvalidValueError(String),
     NotSupported(String),
     PermissionDenied(String),
     InvalidProfile(String),
     InvalidGovernor(String),
     ParseError(String),
-    ReadError(String),
     PathMissing(String),
 }
 
@@ -28,6 +28,7 @@ impl std::fmt::Display for ControlError {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::WriteError(s) => write!(f, "Failed to write to sysfs path: {s}"),
+            Self::ReadError(s) => write!(f, "Failed to read sysfs path: {s}"),
             Self::InvalidValueError(s) => write!(f, "Invalid value for setting: {s}"),
             Self::NotSupported(s) => write!(f, "Control action not supported: {s}"),
             Self::PermissionDenied(s) => {
@@ -45,9 +46,6 @@ impl std::fmt::Display for ControlError {
             Self::ParseError(s) => {
                 write!(f, "Failed to parse value: {s}")
             }
-            Self::ReadError(s) => {
-                write!(f, "Failed to read sysfs path: {s}")
-            }
             Self::PathMissing(s) => {
                 write!(f, "Path missing: {s}")
             }
@@ -63,7 +61,6 @@ pub enum SysMonitorError {
     ReadError(String),
     ParseError(String),
     ProcStatParseError(String),
-    NotAvailable(String),
 }
 
 impl From<io::Error> for SysMonitorError {
@@ -81,7 +78,6 @@ impl std::fmt::Display for SysMonitorError {
             Self::ProcStatParseError(s) => {
                 write!(f, "Failed to parse /proc/stat: {s}")
             }
-            Self::NotAvailable(s) => write!(f, "Information not available: {s}"),
         }
     }
 }

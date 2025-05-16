@@ -1,4 +1,5 @@
-use crate::config::{AppConfig, ProfileConfig};
+use crate::battery;
+use crate::config::{AppConfig, ProfileConfig, TurboAutoSettings};
 use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
 use crate::util::error::{ControlError, EngineError};
@@ -22,14 +23,13 @@ where
     match apply_fn() {
         Ok(_) => Ok(()),
         Err(e) => {
-            if matches!(e, ControlError::NotSupported(_))
-                || matches!(e, ControlError::PathMissing(_))
-            {
+            if matches!(e, ControlError::NotSupported(_)) {
                 warn!(
                     "{feature_name} setting is not supported on this system. Skipping {feature_name} configuration."
                 );
                 Ok(())
             } else {
+                // Propagate all other errors, including InvalidValueError
                 Err(EngineError::ControlError(e))
             }
         }
@@ -50,8 +50,10 @@ pub fn determine_and_apply_settings(
             override_governor.trim()
         );
 
-        // Apply the override governor setting - validation is handled by set_governor
-        cpu::set_governor(override_governor.trim(), None)?;
+        // Apply the override governor setting
+        try_apply_feature("override governor", override_governor.trim(), || {
+            cpu::set_governor(override_governor.trim(), None)
+        })?;
     }
 
     let selected_profile_config: &ProfileConfig;
@@ -69,11 +71,15 @@ pub fn determine_and_apply_settings(
         }
     } else {
         // Determine AC/Battery status
-        // If no batteries, assume AC power (desktop).
-        // Otherwise, check the ac_connected status from the (first) battery.
-        // XXX: This relies on the setting ac_connected in BatteryInfo being set correctly.
-        let on_ac_power =
-            report.batteries.is_empty() || report.batteries.first().is_some_and(|b| b.ac_connected);
+        // For desktops (no batteries), we should always use the AC power profile
+        // For laptops, we check if any battery is present and not connected to AC
+        let on_ac_power = if report.batteries.is_empty() {
+            // No batteries means desktop/server, always on AC
+            true
+        } else {
+            // Check if any battery reports AC connected
+            report.batteries.iter().any(|b| b.ac_connected)
+        };
 
         if on_ac_power {
             info!("On AC power, selecting Charger profile.");
@@ -90,7 +96,7 @@ pub fn determine_and_apply_settings(
         // Let set_governor handle the validation
         if let Err(e) = cpu::set_governor(governor, None) {
             // If the governor is not available, log a warning
-            if matches!(e, ControlError::InvalidGovernor(_))
+            if matches!(e, ControlError::InvalidValueError(_))
                 || matches!(e, ControlError::NotSupported(_))
             {
                 warn!(
@@ -143,6 +149,24 @@ pub fn determine_and_apply_settings(
         })?;
     }
 
+    // Set battery charge thresholds if configured
+    if let Some(thresholds) = &selected_profile_config.battery_charge_thresholds {
+        let start_threshold = thresholds.start;
+        let stop_threshold = thresholds.stop;
+
+        if start_threshold < stop_threshold && stop_threshold <= 100 {
+            info!("Setting battery charge thresholds: {start_threshold}-{stop_threshold}%");
+            match battery::set_battery_charge_thresholds(start_threshold, stop_threshold) {
+                Ok(()) => debug!("Battery charge thresholds set successfully"),
+                Err(e) => warn!("Failed to set battery charge thresholds: {e}"),
+            }
+        } else {
+            warn!(
+                "Invalid battery threshold values: start={start_threshold}, stop={stop_threshold}"
+            );
+        }
+    }
+
     debug!("Profile settings applied successfully.");
 
     Ok(())
@@ -151,6 +175,9 @@ pub fn determine_and_apply_settings(
 fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<(), EngineError> {
     // Get the auto turbo settings from the config, or use defaults
     let turbo_settings = config.turbo_auto_settings.clone().unwrap_or_default();
+
+    // Validate the complete configuration to ensure it's usable
+    validate_turbo_auto_settings(&turbo_settings)?;
 
     // Get average CPU temperature and CPU load
     let cpu_temp = report.cpu_global.average_temperature_celsius;
@@ -176,14 +203,6 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
             None
         }
     };
-
-    // Validate the configuration to ensure it's usable
-    if turbo_settings.load_threshold_high <= turbo_settings.load_threshold_low {
-        return Err(EngineError::ConfigurationError(
-            "Invalid turbo auto settings: high threshold must be greater than low threshold"
-                .to_string(),
-        ));
-    }
 
     // Decision logic for enabling/disabling turbo
     let enable_turbo = match (cpu_temp, avg_cpu_usage) {
@@ -236,4 +255,31 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
         Err(e) => Err(EngineError::ControlError(e)),
     }
+}
+
+fn validate_turbo_auto_settings(settings: &TurboAutoSettings) -> Result<(), EngineError> {
+    // Validate load thresholds
+    if settings.load_threshold_high <= settings.load_threshold_low {
+        return Err(EngineError::ConfigurationError(
+            "Invalid turbo auto settings: high threshold must be greater than low threshold"
+                .to_string(),
+        ));
+    }
+
+    // Validate range of load thresholds (should be 0-100%)
+    if settings.load_threshold_high > 100.0 || settings.load_threshold_low < 0.0 {
+        return Err(EngineError::ConfigurationError(
+            "Invalid turbo auto settings: load thresholds must be between 0% and 100%".to_string(),
+        ));
+    }
+
+    // Validate temperature threshold (realistic range for CPU temps in Celsius)
+    if settings.temp_threshold_high <= 0.0 || settings.temp_threshold_high > 110.0 {
+        return Err(EngineError::ConfigurationError(
+            "Invalid turbo auto settings: temperature threshold must be between 0°C and 110°C"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
