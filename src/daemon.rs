@@ -10,6 +10,255 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+/// Tracks historical system data for advanced adaptive polling
+struct SystemHistory {
+    /// Last several CPU usage measurements
+    cpu_usage_history: Vec<f32>,
+    /// Last several temperature readings
+    temperature_history: Vec<f32>,
+    /// Time of last detected user activity
+    last_user_activity: Instant,
+    /// Previous battery percentage (to calculate discharge rate)
+    last_battery_percentage: Option<f32>,
+    /// Timestamp of last battery reading
+    last_battery_timestamp: Option<Instant>,
+    /// Battery discharge rate (%/hour)
+    battery_discharge_rate: Option<f32>,
+    /// Time spent in each system state
+    state_durations: std::collections::HashMap<SystemState, Duration>,
+    /// Last time a state transition happened
+    last_state_change: Instant,
+    /// Current system state
+    current_state: SystemState,
+}
+
+impl SystemHistory {
+    fn new() -> Self {
+        Self {
+            cpu_usage_history: Vec::with_capacity(5),
+            temperature_history: Vec::with_capacity(5),
+            last_user_activity: Instant::now(),
+            last_battery_percentage: None,
+            last_battery_timestamp: None,
+            battery_discharge_rate: None,
+            state_durations: std::collections::HashMap::new(),
+            last_state_change: Instant::now(),
+            current_state: SystemState::Unknown,
+        }
+    }
+
+    /// Update system history with new report data
+    fn update(&mut self, report: &SystemReport) {
+        // Update CPU usage history
+        if !report.cpu_cores.is_empty() {
+            // Get average CPU usage across all cores
+            let total: f32 = report
+                .cpu_cores
+                .iter()
+                .filter_map(|core| core.usage_percent)
+                .sum();
+            let count = report
+                .cpu_cores
+                .iter()
+                .filter(|c| c.usage_percent.is_some())
+                .count();
+
+            if count > 0 {
+                let avg_usage = total / count as f32;
+
+                // Keep only the last 5 measurements
+                if self.cpu_usage_history.len() >= 5 {
+                    self.cpu_usage_history.remove(0);
+                }
+                self.cpu_usage_history.push(avg_usage);
+
+                // Update last_user_activity if CPU usage indicates activity
+                // Consider significant CPU usage or sudden change as user activity
+                if avg_usage > 20.0
+                    || (self.cpu_usage_history.len() > 1
+                        && (avg_usage - self.cpu_usage_history[self.cpu_usage_history.len() - 2])
+                            .abs()
+                            > 15.0)
+                {
+                    self.last_user_activity = Instant::now();
+                    debug!("User activity detected based on CPU usage");
+                }
+            }
+        }
+
+        // Update temperature history
+        if let Some(temp) = report.cpu_global.average_temperature_celsius {
+            if self.temperature_history.len() >= 5 {
+                self.temperature_history.remove(0);
+            }
+            self.temperature_history.push(temp);
+
+            // Significant temperature increase can indicate user activity
+            if self.temperature_history.len() > 1 {
+                let temp_change =
+                    temp - self.temperature_history[self.temperature_history.len() - 2];
+                if temp_change > 5.0 {
+                    // 5°C rise in temperature
+                    self.last_user_activity = Instant::now();
+                    debug!("User activity detected based on temperature change");
+                }
+            }
+        }
+
+        // Update battery discharge rate
+        if let Some(battery) = report.batteries.first() {
+            // Reset when we are charging or have just connected AC
+            if battery.ac_connected {
+                self.battery_discharge_rate = None;
+                self.last_battery_percentage = None;
+                self.last_battery_timestamp = None;
+                return;
+            }
+
+            if let Some(current_percentage) = battery.capacity_percent {
+                let current_percent = f32::from(current_percentage);
+
+                if let (Some(last_percentage), Some(last_timestamp)) =
+                    (self.last_battery_percentage, self.last_battery_timestamp)
+                {
+                    let elapsed_hours = last_timestamp.elapsed().as_secs_f32() / 3600.0;
+                    if elapsed_hours > 0.0 && !battery.ac_connected {
+                        // Calculate discharge rate in percent per hour
+                        let percent_change = last_percentage - current_percent;
+                        if percent_change > 0.0 {
+                            // Only if battery is discharging
+                            let hourly_rate = percent_change / elapsed_hours;
+                            self.battery_discharge_rate = Some(hourly_rate);
+                        }
+                    }
+                }
+
+                self.last_battery_percentage = Some(current_percent);
+                self.last_battery_timestamp = Some(Instant::now());
+            }
+        }
+
+        // Update system state tracking
+        let new_state = determine_system_state(report);
+        if new_state != self.current_state {
+            // Record time spent in previous state
+            let time_in_state = self.last_state_change.elapsed();
+            *self
+                .state_durations
+                .entry(self.current_state.clone())
+                .or_insert(Duration::ZERO) += time_in_state;
+
+            // State changes (except to Idle) likely indicate user activity
+            if new_state != SystemState::Idle && new_state != SystemState::LowLoad {
+                self.last_user_activity = Instant::now();
+                debug!("User activity detected based on system state change to {new_state:?}");
+            }
+
+            // Update state
+            self.current_state = new_state;
+            self.last_state_change = Instant::now();
+        }
+
+        // Check for significant load changes
+        if report.system_load.load_avg_1min > 1.0 {
+            self.last_user_activity = Instant::now();
+            debug!("User activity detected based on system load");
+        }
+    }
+
+    /// Calculate CPU usage volatility (how much it's changing)
+    fn get_cpu_volatility(&self) -> f32 {
+        if self.cpu_usage_history.len() < 2 {
+            return 0.0;
+        }
+
+        let mut sum_of_changes = 0.0;
+        for i in 1..self.cpu_usage_history.len() {
+            sum_of_changes += (self.cpu_usage_history[i] - self.cpu_usage_history[i - 1]).abs();
+        }
+
+        sum_of_changes / (self.cpu_usage_history.len() - 1) as f32
+    }
+
+    /// Calculate temperature volatility
+    fn get_temperature_volatility(&self) -> f32 {
+        if self.temperature_history.len() < 2 {
+            return 0.0;
+        }
+
+        let mut sum_of_changes = 0.0;
+        for i in 1..self.temperature_history.len() {
+            sum_of_changes += (self.temperature_history[i] - self.temperature_history[i - 1]).abs();
+        }
+
+        sum_of_changes / (self.temperature_history.len() - 1) as f32
+    }
+
+    /// Determine if the system appears to be idle
+    fn is_system_idle(&self) -> bool {
+        if self.cpu_usage_history.is_empty() {
+            return false;
+        }
+
+        // System considered idle if the average CPU usage of last readings is below 10%
+        let recent_avg =
+            self.cpu_usage_history.iter().sum::<f32>() / self.cpu_usage_history.len() as f32;
+        recent_avg < 10.0 && self.get_cpu_volatility() < 5.0
+    }
+
+    /// Calculate optimal polling interval based on system conditions
+    fn calculate_optimal_interval(&self, config: &AppConfig, on_battery: bool) -> u64 {
+        let base_interval = config.daemon.poll_interval_sec;
+        let min_interval = config.daemon.min_poll_interval_sec;
+        let max_interval = config.daemon.max_poll_interval_sec;
+
+        // Start with base interval
+        let mut adjusted_interval = base_interval;
+
+        // If we're on battery, we want to be more aggressive about saving power
+        if on_battery {
+            // Apply a multiplier based on battery discharge rate
+            if let Some(discharge_rate) = self.battery_discharge_rate {
+                if discharge_rate > 20.0 {
+                    // High discharge rate - increase polling interval significantly
+                    adjusted_interval = (adjusted_interval as f32 * 3.0) as u64;
+                } else if discharge_rate > 10.0 {
+                    // Moderate discharge - double polling interval
+                    adjusted_interval *= 2;
+                } else {
+                    // Low discharge rate - increase by 50%
+                    adjusted_interval = (adjusted_interval as f32 * 1.5) as u64;
+                }
+            } else {
+                // If we don't know discharge rate, use a conservative multiplier
+                adjusted_interval *= 2;
+            }
+        }
+
+        // Adjust for system idleness
+        if self.is_system_idle() {
+            // If the system has been idle for a while, increase interval
+            let idle_time = self.last_user_activity.elapsed().as_secs();
+            if idle_time > 300 {
+                // 5 minutes
+                adjusted_interval = (adjusted_interval as f32 * 2.0) as u64;
+            }
+        }
+
+        // Adjust for CPU/temperature volatility
+        let cpu_volatility = self.get_cpu_volatility();
+        let temp_volatility = self.get_temperature_volatility();
+
+        // If either CPU usage or temperature is changing rapidly, decrease interval
+        if cpu_volatility > 10.0 || temp_volatility > 2.0 {
+            adjusted_interval = (adjusted_interval as f32 * 0.5) as u64;
+        }
+
+        // Ensure interval stays within configured bounds
+        adjusted_interval.clamp(min_interval, max_interval)
+    }
+}
+
 /// Run the daemon
 pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Set effective log level based on config and verbose flag
@@ -84,8 +333,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
 
     // Variables for adaptive polling
     let mut current_poll_interval = config.daemon.poll_interval_sec;
-    let mut last_settings_change = Instant::now();
-    let mut last_system_state = SystemState::Unknown;
+    let mut system_history = SystemHistory::new();
 
     // Main loop
     while running.load(Ordering::SeqCst) {
@@ -100,8 +348,8 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                         config = new_config;
                         // Reset polling interval after config change
                         current_poll_interval = config.daemon.poll_interval_sec;
-                        // Record this as a settings change for adaptive polling purposes
-                        last_settings_change = Instant::now();
+                        // Mark this as a system event for adaptive polling
+                        system_history.last_user_activity = Instant::now();
                     }
                     Err(e) => {
                         error!("Error loading new configuration: {e}");
@@ -115,8 +363,11 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
             Ok(report) => {
                 debug!("Collected system report, applying settings...");
 
-                // Determine current system state
-                let current_state = determine_system_state(&report);
+                // Store the current state before updating history
+                let previous_state = system_history.current_state.clone();
+
+                // Update system history with new data
+                system_history.update(&report);
 
                 // Update the stats file if configured
                 if let Some(stats_path) = &config.daemon.stats_file_path {
@@ -129,12 +380,12 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                     Ok(()) => {
                         debug!("Successfully applied system settings");
 
-                        // If system state changed or settings were applied differently, record the time
-                        if current_state != last_system_state {
-                            last_settings_change = Instant::now();
-                            last_system_state = current_state.clone();
-
-                            info!("System state changed to: {current_state:?}");
+                        // If system state changed, log the new state
+                        if system_history.current_state != previous_state {
+                            info!(
+                                "System state changed to: {:?}",
+                                system_history.current_state
+                            );
                         }
                     }
                     Err(e) => {
@@ -142,38 +393,39 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                     }
                 }
 
-                // Adjust poll interval if adaptive polling is enabled
+                // Check if we're on battery
+                let on_battery = !report.batteries.is_empty()
+                    && report.batteries.first().is_some_and(|b| !b.ac_connected);
+
+                // Calculate optimal polling interval if adaptive polling is enabled
                 if config.daemon.adaptive_interval {
-                    let time_since_change = last_settings_change.elapsed().as_secs();
+                    let optimal_interval =
+                        system_history.calculate_optimal_interval(&config, on_battery);
 
-                    // If we've been stable for a while, increase the interval (up to max)
-                    if time_since_change > 60 {
-                        current_poll_interval =
-                            (current_poll_interval * 2).min(config.daemon.max_poll_interval_sec);
-
-                        debug!("Adaptive polling: increasing interval to {current_poll_interval}s");
-                    } else if time_since_change < 10 {
-                        // If we've had recent changes, decrease the interval (down to min)
-                        current_poll_interval =
-                            (current_poll_interval / 2).max(config.daemon.min_poll_interval_sec);
-
-                        debug!("Adaptive polling: decreasing interval to {current_poll_interval}s");
+                    // Don't change the interval too dramatically at once
+                    if optimal_interval > current_poll_interval {
+                        current_poll_interval = (current_poll_interval + optimal_interval) / 2;
+                    } else if optimal_interval < current_poll_interval {
+                        current_poll_interval = current_poll_interval
+                            - ((current_poll_interval - optimal_interval) / 2).max(1);
                     }
+
+                    debug!("Adaptive polling: set interval to {current_poll_interval}s");
                 } else {
-                    // If not adaptive, use the configured poll interval
-                    current_poll_interval = config.daemon.poll_interval_sec;
-                }
+                    // If adaptive polling is disabled, still apply battery-saving adjustment
+                    if config.daemon.throttle_on_battery && on_battery {
+                        let battery_multiplier = 2; // Poll half as often on battery
+                        current_poll_interval = (config.daemon.poll_interval_sec
+                            * battery_multiplier)
+                            .min(config.daemon.max_poll_interval_sec);
 
-                // If on battery and throttling is enabled, lengthen the poll interval to save power
-                if config.daemon.throttle_on_battery
-                    && !report.batteries.is_empty()
-                    && report.batteries.first().is_some_and(|b| !b.ac_connected)
-                {
-                    let battery_multiplier = 2; // Poll half as often on battery
-                    current_poll_interval = (current_poll_interval * battery_multiplier)
-                        .min(config.daemon.max_poll_interval_sec);
-
-                    debug!("On battery power, increasing poll interval to save energy");
+                        debug!(
+                            "On battery power, increased poll interval to {current_poll_interval}s"
+                        );
+                    } else {
+                        // Use the configured poll interval
+                        current_poll_interval = config.daemon.poll_interval_sec;
+                    }
                 }
             }
             Err(e) => {
@@ -227,7 +479,7 @@ fn write_stats_file(path: &str, report: &SystemReport) -> Result<(), std::io::Er
 }
 
 /// Simplified system state used for determining when to adjust polling interval
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 enum SystemState {
     Unknown,
     OnAC,
@@ -235,6 +487,7 @@ enum SystemState {
     HighLoad,
     LowLoad,
     HighTemp,
+    Idle,
 }
 
 /// Determine the current system state for adaptive polling
@@ -259,6 +512,17 @@ fn determine_system_state(report: &SystemReport) -> SystemState {
         if temp > 80.0 {
             return SystemState::HighTemp;
         }
+    }
+
+    // Check idle state by checking very low CPU usage
+    let is_idle = report
+        .cpu_cores
+        .iter()
+        .filter_map(|c| c.usage_percent)
+        .all(|usage| usage < 5.0);
+
+    if is_idle {
+        return SystemState::Idle;
     }
 
     // Check load
