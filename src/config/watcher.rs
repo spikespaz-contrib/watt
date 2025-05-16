@@ -1,3 +1,4 @@
+use log::{debug, error, warn};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::error::Error;
 use std::path::Path;
@@ -26,6 +27,8 @@ impl ConfigWatcher {
         // Start watching the config file
         watcher.watch(Path::new(config_path), RecursiveMode::NonRecursive)?;
 
+        debug!("Started watching config file: {config_path}");
+
         Ok(Self {
             rx,
             _watcher: watcher,
@@ -46,15 +49,34 @@ impl ConfigWatcher {
         loop {
             match self.rx.try_recv() {
                 Ok(Ok(event)) => {
-                    // Only process write/modify events
-                    if matches!(event.kind, EventKind::Modify(_)) {
-                        should_reload = true;
+                    // Process various file events that might indicate configuration changes
+                    match event.kind {
+                        EventKind::Modify(_) => {
+                            debug!("Detected modification to config file: {}", self.config_path);
+                            should_reload = true;
+                        }
+                        EventKind::Create(_) => {
+                            debug!("Detected recreation of config file: {}", self.config_path);
+                            should_reload = true;
+                        }
+                        EventKind::Remove(_) => {
+                            // Some editors delete then recreate the file when saving
+                            // Just log this event and wait for the create event
+                            debug!(
+                                "Detected removal of config file: {} - waiting for recreation",
+                                self.config_path
+                            );
+                        }
+                        _ => {} // Ignore other event types
+                    }
+
+                    if should_reload {
                         self.last_event_time = std::time::Instant::now();
                     }
                 }
                 Ok(Err(e)) => {
                     // File watcher error, log but continue
-                    eprintln!("Error watching config file: {e}");
+                    warn!("Error watching config file: {e}");
                 }
                 Err(TryRecvError::Empty) => {
                     // No more events
@@ -62,7 +84,7 @@ impl ConfigWatcher {
                 }
                 Err(TryRecvError::Disconnected) => {
                     // Channel disconnected, watcher is dead
-                    eprintln!("Config watcher channel disconnected");
+                    error!("Config watcher channel disconnected");
                     return None;
                 }
             }
@@ -78,18 +100,31 @@ impl ConfigWatcher {
                 thread::sleep(debounce_time - time_since_last_event);
             }
 
+            // Ensure the file exists before attempting to reload
+            let config_path = Path::new(&self.config_path);
+            if !config_path.exists() {
+                warn!(
+                    "Config file does not exist after change events: {}",
+                    self.config_path
+                );
+                return None;
+            }
+
+            debug!("Reloading configuration from {}", self.config_path);
+
             // Attempt to reload the config from the specific path being watched
             match load_config_from_path(Some(&self.config_path)) {
-                Ok(config) => Some(Ok(config)),
-                Err(e) => Some(Err(Box::new(e))),
+                Ok(config) => {
+                    debug!("Successfully reloaded configuration");
+                    Some(Ok(config))
+                }
+                Err(e) => {
+                    error!("Failed to reload configuration: {e}");
+                    Some(Err(Box::new(e)))
+                }
             }
         } else {
             None
         }
-    }
-
-    /// Get the path of the config file being watched
-    pub const fn config_path(&self) -> &String {
-        &self.config_path
     }
 }

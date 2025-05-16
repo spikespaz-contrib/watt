@@ -101,7 +101,7 @@ fn main() {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("Error loading configuration: {e}. Using default values.");
-            // Proceed with default config if loading fails, as per previous steps
+            // Proceed with default config if loading fails
             AppConfig::default()
         }
     };
