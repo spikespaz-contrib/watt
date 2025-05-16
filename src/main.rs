@@ -358,17 +358,9 @@ fn main() {
         }
         Some(Commands::SetMinFreq { freq_mhz, core_id }) => {
             // Basic validation for reasonable CPU frequency values
-            if freq_mhz == 0 {
-                error!("Minimum frequency cannot be zero");
-                Err(Box::new(ControlError::InvalidValueError(
-                    "Minimum frequency cannot be zero".to_string(),
-                )) as Box<dyn std::error::Error>)
-            } else if freq_mhz > 10000 {
-                // Extremely high value unlikely to be valid
-                error!("Minimum frequency ({freq_mhz} MHz) is unreasonably high");
-                Err(Box::new(ControlError::InvalidValueError(format!(
-                    "Minimum frequency ({freq_mhz} MHz) is unreasonably high"
-                ))) as Box<dyn std::error::Error>)
+            if let Err(e) = validate_freq(freq_mhz, "Minimum") {
+                error!("{e}");
+                Err(e)
             } else {
                 cpu::set_min_frequency(freq_mhz, core_id)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
@@ -376,17 +368,9 @@ fn main() {
         }
         Some(Commands::SetMaxFreq { freq_mhz, core_id }) => {
             // Basic validation for reasonable CPU frequency values
-            if freq_mhz == 0 {
-                error!("Maximum frequency cannot be zero");
-                Err(Box::new(ControlError::InvalidValueError(
-                    "Maximum frequency cannot be zero".to_string(),
-                )) as Box<dyn std::error::Error>)
-            } else if freq_mhz > 10000 {
-                // Extremely high value unlikely to be valid
-                error!("Maximum frequency ({freq_mhz} MHz) is unreasonably high");
-                Err(Box::new(ControlError::InvalidValueError(format!(
-                    "Maximum frequency ({freq_mhz} MHz) is unreasonably high"
-                ))) as Box<dyn std::error::Error>)
+            if let Err(e) = validate_freq(freq_mhz, "Maximum") {
+                error!("{e}");
+                Err(e)
             } else {
                 cpu::set_max_frequency(freq_mhz, core_id)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
@@ -496,4 +480,22 @@ fn init_logger() {
 
         debug!("Logger initialized with RUST_LOG={env_log}");
     });
+}
+
+/// Validate CPU frequency input values
+fn validate_freq(freq_mhz: u32, label: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if freq_mhz == 0 {
+        error!("{label} frequency cannot be zero");
+        Err(Box::new(ControlError::InvalidValueError(format!(
+            "{label} frequency cannot be zero"
+        ))) as Box<dyn std::error::Error>)
+    } else if freq_mhz > 10000 {
+        // Extremely high value unlikely to be valid
+        error!("{label} frequency ({freq_mhz} MHz) is unreasonably high");
+        Err(Box::new(ControlError::InvalidValueError(format!(
+            "{label} frequency ({freq_mhz} MHz) is unreasonably high"
+        ))) as Box<dyn std::error::Error>)
+    } else {
+        Ok(())
+    }
 }
