@@ -15,6 +15,17 @@ const VALID_EPB_STRINGS: &[&str] = &[
     "power",
 ];
 
+// EPP (Energy Performance Preference) string values
+const EPP_FALLBACK_VALUES: &[&str] = &[
+    "default",
+    "performance",
+    "balance-performance",
+    "balance_performance", // alternative form with underscore
+    "balance-power",
+    "balance_power", // alternative form with underscore
+    "power",
+];
+
 // Write a value to a sysfs file
 fn write_sysfs_value(path: impl AsRef<Path>, value: &str) -> Result<()> {
     let p = path.as_ref();
@@ -288,17 +299,9 @@ fn get_available_epp_values() -> Result<Vec<String>> {
 
     if !Path::new(path).exists() {
         // If the file doesn't exist, fall back to a default set of common values
-        // This is safer than failing outright, as some systems may allow these values
+        // This is safer than failing outright, as some systems may allow these values     │
         // even without explicitly listing them
-        return Ok(vec![
-            "default".to_string(),
-            "performance".to_string(),
-            "balance_performance".to_string(),
-            "balance_performance".replace('_', "-"),
-            "balance_power".to_string(),
-            "balance_power".replace('_', "-"),
-            "power".to_string(),
-        ]);
+        return Ok(EPP_FALLBACK_VALUES.iter().map(|&s| s.to_string()).collect());
     }
 
     let content = fs::read_to_string(path).map_err(|e| {
