@@ -135,22 +135,70 @@ fn is_governor_valid(governor: &str) -> Result<(bool, Vec<String>)> {
 
 /// Get available CPU governors from the system
 fn get_available_governors() -> Result<Vec<String>> {
-    // We'll check cpu0's available governors as they're typically the same across cores
-    let path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors";
+    let cpu_base_path = Path::new("/sys/devices/system/cpu");
 
-    if !Path::new(path).exists() {
-        return Err(ControlError::NotSupported(
-            "Could not determine available governors".to_string(),
-        ));
+    // First try the traditional path with cpu0. This is the most common case
+    // and will usually catch early, but we should try to keep the code to handle
+    // "edge" cases lightweight, for the (albeit smaller) number of users that
+    // run Superfreq on unusual systems.
+    let cpu0_path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors";
+    if Path::new(cpu0_path).exists() {
+        let content = fs::read_to_string(cpu0_path).map_err(|e| {
+            ControlError::ReadError(format!("Failed to read available governors from cpu0: {e}"))
+        })?;
+
+        let governors: Vec<String> = content
+            .split_whitespace()
+            .map(ToString::to_string)
+            .collect();
+
+        if !governors.is_empty() {
+            return Ok(governors);
+        }
     }
 
-    let content = fs::read_to_string(path)
-        .map_err(|e| ControlError::ReadError(format!("Failed to read available governors: {e}")))?;
+    // If cpu0 doesn't have the file or it's empty, scan all CPUs
+    // This handles heterogeneous systems where cpu0 might not have cpufreq
+    if let Ok(entries) = fs::read_dir(cpu_base_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let name = match file_name.to_str() {
+                Some(name) => name,
+                None => continue,
+            };
 
-    Ok(content
-        .split_whitespace()
-        .map(ToString::to_string)
-        .collect())
+            // Skip non-CPU directories
+            if !name.starts_with("cpu")
+                || name.len() <= 3
+                || !name[3..].chars().all(char::is_numeric)
+            {
+                continue;
+            }
+
+            let governor_path = path.join("cpufreq/scaling_available_governors");
+            if governor_path.exists() {
+                match fs::read_to_string(&governor_path) {
+                    Ok(content) => {
+                        let governors: Vec<String> = content
+                            .split_whitespace()
+                            .map(ToString::to_string)
+                            .collect();
+
+                        if !governors.is_empty() {
+                            return Ok(governors);
+                        }
+                    }
+                    Err(_) => continue, // try next CPU if this one fails
+                }
+            }
+        }
+    }
+
+    // If we get here, we couldn't find any valid governors list
+    Err(ControlError::NotSupported(
+        "Could not determine available governors on any CPU".to_string(),
+    ))
 }
 
 pub fn set_turbo(setting: TurboSetting) -> Result<()> {
