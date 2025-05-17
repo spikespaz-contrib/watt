@@ -618,16 +618,18 @@ fn determine_system_state(report: &SystemReport, history: &SystemHistory) -> Sys
         }
     }
 
-    // Check idle state
-    if history.is_system_idle() {
-        return SystemState::Idle;
-    }
-
-    // Check load
+    // Check load first, as high load should take precedence over idle state
     let avg_load = report.system_load.load_avg_1min;
     if avg_load > 3.0 {
         return SystemState::HighLoad;
     }
+    
+    // Check idle state only if we don't have high load
+    if history.is_system_idle() {
+        return SystemState::Idle;
+    }
+
+    // Check for low load
     if avg_load < 0.5 {
         return SystemState::LowLoad;
     }
