@@ -33,6 +33,31 @@ struct IntervalParams {
     on_battery: bool,
 }
 
+/// Calculate the idle time multiplier based on system idle duration
+///
+/// Returns a multiplier between 1.0 and 5.0 (capped):
+/// - For idle times < 2 minutes: Linear interpolation from 1.0 to 2.0
+/// - For idle times >= 2 minutes: Logarithmic scaling (1.0 + log2(minutes))
+fn idle_multiplier(idle_secs: u64) -> f32 {
+    if idle_secs == 0 {
+        return 1.0; // No idle time, no multiplier effect
+    }
+
+    let idle_factor = if idle_secs < 120 {
+        // Less than 2 minutes (0 to 119 seconds)
+        // Linear interpolation from 1.0 (at 0s) to 2.0 (at 120s)
+        1.0 + (idle_secs as f32) / 120.0
+    } else {
+        // 2 minutes (120 seconds) or more
+        let idle_time_minutes = idle_secs / 60;
+        // Logarithmic scaling: 1.0 + log2(minutes)
+        1.0 + (idle_time_minutes as f32).log2().max(0.5)
+    };
+
+    // Cap the multiplier to avoid excessive intervals
+    idle_factor.min(5.0) // max factor of 5x
+}
+
 /// Calculate optimal polling interval based on system conditions and history
 fn compute_new(params: &IntervalParams) -> u64 {
     // Start with base interval
@@ -72,42 +97,25 @@ fn compute_new(params: &IntervalParams) -> u64 {
     if params.is_system_idle {
         let idle_time_seconds = params.last_user_activity.as_secs();
 
-        // Apply adjustment only if the system has been idle for a non-zero duration.
-        // The factor starts at 1.0 for 0 seconds idle time and increases.
+        // Apply adjustment only if the system has been idle for a non-zero duration
         if idle_time_seconds > 0 {
-            let idle_factor = if idle_time_seconds < 120 {
-                // Less than 2 minutes (0 to 119 seconds)
-                // Linear interpolation from 1.0 (at 0s) to 2.0 (at 120s).
-                // Value at 60s (1 min) = 1.0 + 60.0/120.0 = 1.5.
-                // This should provide a smooth transition from no multiplier (or 1.0x)
-                // up to the point where the logarithmic scale takes over at 2 minutes.
-                1.0 + (idle_time_seconds as f32) / 120.0
-            } else {
-                // 2 minutes (120 seconds) or more
-                let idle_time_minutes = idle_time_seconds / 60;
-                // At 2 minutes (120s), (2_f32).log2() = 1.0. So, factor = 1.0 + 1.0 = 2.0.
-                1.0 + (idle_time_minutes as f32).log2().max(0.5)
-            };
-
-            // Cap the multiplier to avoid excessive intervals
-            let capped_factor = idle_factor.min(5.0); // max factor of 5x
+            let idle_factor = idle_multiplier(idle_time_seconds);
 
             debug!(
-                "System idle for {} seconds (approx. {} minutes), applying idle factor: {:.2}x (raw: {:.2}x)",
+                "System idle for {} seconds (approx. {} minutes), applying idle factor: {:.2}x",
                 idle_time_seconds,
                 (idle_time_seconds as f32 / 60.0).round(),
-                capped_factor,
                 idle_factor
             );
 
-            let multiplied = adjusted_interval as f64 * f64::from(capped_factor);
+            let multiplied = adjusted_interval as f64 * f64::from(idle_factor);
             adjusted_interval = if multiplied >= u64::MAX as f64 {
                 u64::MAX
             } else {
                 multiplied.round() as u64
             };
         }
-        // If idle_time_seconds is 0, no factor is applied by this block, effectively 1.0x.
+        // If idle_time_seconds is 0, no factor is applied by this block
     }
 
     // Adjust for CPU/temperature volatility
