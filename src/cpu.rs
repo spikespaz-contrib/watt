@@ -212,24 +212,44 @@ fn get_available_governors() -> Result<Vec<String>> {
     ))
 }
 
-// FIXME: I think the Auto Turbo behaviour is still pretty confusing for the end-user
-// who might not have read the documentation in detail. We could just make the program
-// more verbose here, but I think this is a fundamental design flaw that I will want
-// to refactor in the future. For now though, I think this is a good-ish solution.
+/// Controls CPU turbo boost behavior by writing to appropriate sysfs files.
+///
+/// # Parameters
+///
+/// * `setting` - The desired turbo boost setting:
+///   - `TurboSetting::Always`: Forces turbo boost to be always enabled
+///   - `TurboSetting::Never`: Forces turbo boost to be always disabled
+///   - `TurboSetting::Auto`: Has two distinct behaviors depending on the context:
+///     1. When called directly from user commands: Resets turbo to system default (enabled)
+///     2. When used with `enable_auto_turbo=true` in config: Managed dynamically by the engine
+///
+/// # Turbo Auto Mode Explained
+///
+/// When `TurboSetting::Auto` is used:
+/// - This function writes the same values as `TurboSetting::Always` to reset the hardware
+///   to its default state (turbo enabled)
+/// - The actual dynamic management happens at a higher level in the engine module
+///   when `enable_auto_turbo=true`
+/// - With `enable_auto_turbo=false`, the system's native turbo management takes over
+///
+///
+/// # Returns
+///
+/// * `Result<()>` - Success or an error if the operation failed
 pub fn set_turbo(setting: TurboSetting) -> Result<()> {
     let value_pstate = match setting {
         TurboSetting::Always => "0", // no_turbo = 0 means turbo is enabled
         TurboSetting::Never => "1",  // no_turbo = 1 means turbo is disabled
         // For Auto, we need to enable the hardware default (which is turbo enabled)
         // and we reset to the system default when explicitly set to Auto
-        TurboSetting::Auto => "0", // Set to enabled (default hardware state) when Auto is requested
+        TurboSetting::Auto => "0", // set to enabled (default hardware state) when Auto is requested
     };
     let value_boost = match setting {
         TurboSetting::Always => "1", // boost = 1 means turbo is enabled
         TurboSetting::Never => "0",  // boost = 0 means turbo is disabled
         // For Auto, we need to enable the hardware default (which is turbo enabled)
         // and we reset to the system default when explicitly set to Auto
-        TurboSetting::Auto => "1", // Set to enabled (default hardware state) when Auto is requested
+        TurboSetting::Auto => "1", // set to enabled (default hardware state) when Auto is requested
     };
 
     // AMD specific paths
