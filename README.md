@@ -321,7 +321,7 @@ the codebase as they stand.
 
 ### Setup
 
-You will need Cargo and Rust installed on your system. Rust 1.80 or later is
+You will need Cargo and Rust installed on your system. Rust 1.85 or later is
 required.
 
 A `.envrc` is provided, and it's usage is encouraged for Nix users.
