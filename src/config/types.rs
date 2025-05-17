@@ -156,7 +156,7 @@ impl Default for ProfileConfigToml {
             min_freq_mhz: None,
             max_freq_mhz: None,
             platform_profile: None,
-            turbo_auto_settings: Some(TurboAutoSettings::default()),
+            turbo_auto_settings: None,
             enable_auto_turbo: default_enable_auto_turbo(),
             battery_charge_thresholds: None,
         }

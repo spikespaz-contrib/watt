@@ -5,6 +5,40 @@ use crate::cpu::{self};
 use crate::util::error::{ControlError, EngineError};
 use log::{debug, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+/// A struct to track turbo boost state for AC and battery power modes
+struct TurboHysteresisStates {
+    /// State for when on AC power
+    charger: TurboHysteresis,
+    /// State for when on battery power
+    battery: TurboHysteresis,
+}
+
+impl TurboHysteresisStates {
+    const fn new() -> Self {
+        Self {
+            charger: TurboHysteresis::new(),
+            battery: TurboHysteresis::new(),
+        }
+    }
+
+    const fn get_for_power_state(&self, is_on_ac: bool) -> &TurboHysteresis {
+        if is_on_ac {
+            &self.charger
+        } else {
+            &self.battery
+        }
+    }
+}
+
+/// Create a global instance of `TurboHysteresisStates` protected by a mutex
+static TURBO_STATES: OnceLock<Mutex<TurboHysteresisStates>> = OnceLock::new();
+
+/// Get or initialize the global turbo states
+fn get_turbo_states() -> &'static Mutex<TurboHysteresisStates> {
+    TURBO_STATES.get_or_init(|| Mutex::new(TurboHysteresisStates::new()))
+}
 
 /// Manage turbo boost hysteresis state.
 /// Contains the state needed to implement hysteresis
@@ -48,12 +82,6 @@ impl TurboHysteresis {
         self.previous_state.store(new_state, Ordering::Release);
         self.initialized.store(true, Ordering::Release);
     }
-}
-
-// Thread-local instance of TurboHysteresis for each profile
-thread_local! {
-    static CHARGER_TURBO_HYSTERESIS: TurboHysteresis = const { TurboHysteresis::new() };
-    static BATTERY_TURBO_HYSTERESIS: TurboHysteresis = const { TurboHysteresis::new() };
 }
 
 /// Try applying a CPU feature and handle common error cases. Centralizes the where we
@@ -267,27 +295,25 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     };
 
     // Use the appropriate hysteresis object based on whether we're on battery or AC power
-    let is_on_ac = report.batteries.iter().any(|b| b.ac_connected);
+    // For systems without batteries (desktops), we should always use the AC power hysteresis
+    let is_on_ac = if report.batteries.is_empty() {
+        // No batteries means desktop/server, always on AC
+        true
+    } else {
+        // Check if any battery reports AC connected
+        report.batteries.iter().any(|b| b.ac_connected)
+    };
 
     // Get the previous state or initialize with the configured initial state
-    let previous_turbo_enabled = if is_on_ac {
-        CHARGER_TURBO_HYSTERESIS.with(|h| {
-            if let Some(state) = h.get_previous_state() {
-                Some(state)
-            } else {
-                // Initialize with the configured initial state and return it
-                Some(h.initialize_with(turbo_settings.initial_turbo_state))
-            }
-        })
-    } else {
-        BATTERY_TURBO_HYSTERESIS.with(|h| {
-            if let Some(state) = h.get_previous_state() {
-                Some(state)
-            } else {
-                // Initialize with the configured initial state and return it
-                Some(h.initialize_with(turbo_settings.initial_turbo_state))
-            }
-        })
+    let previous_turbo_enabled = {
+        let turbo_states = get_turbo_states().lock().unwrap();
+        let hysteresis = turbo_states.get_for_power_state(is_on_ac);
+        if let Some(state) = hysteresis.get_previous_state() {
+            Some(state)
+        } else {
+            // Initialize with the configured initial state and return it
+            Some(hysteresis.initialize_with(turbo_settings.initial_turbo_state))
+        }
     };
 
     // Decision logic for enabling/disabling turbo with hysteresis
@@ -342,11 +368,11 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
     };
 
-    // Save the current state for next time using the appropriate thread-local hysteresis object
-    if is_on_ac {
-        CHARGER_TURBO_HYSTERESIS.with(|h| h.update_state(enable_turbo));
-    } else {
-        BATTERY_TURBO_HYSTERESIS.with(|h| h.update_state(enable_turbo));
+    // Save the current state for next time
+    {
+        let turbo_states = get_turbo_states().lock().unwrap();
+        let hysteresis = turbo_states.get_for_power_state(is_on_ac);
+        hysteresis.update_state(enable_turbo);
     }
 
     // Apply the turbo setting
