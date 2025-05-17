@@ -113,8 +113,15 @@ pub fn determine_and_apply_settings(
         info!("Setting turbo to '{turbo_setting:?}'");
         match turbo_setting {
             TurboSetting::Auto => {
-                debug!("Managing turbo in auto mode based on system conditions");
-                manage_auto_turbo(report, selected_profile_config)?;
+                if selected_profile_config.enable_auto_turbo {
+                    debug!("Managing turbo in auto mode based on system conditions");
+                    manage_auto_turbo(report, selected_profile_config)?;
+                } else {
+                    debug!("Auto turbo management disabled by configuration, using system default behavior");
+                    try_apply_feature("Turbo boost", "system default (Auto)", || {
+                        cpu::set_turbo(turbo_setting)
+                    })?;
+                }
             }
             _ => {
                 try_apply_feature("Turbo boost", &format!("{turbo_setting:?}"), || {
