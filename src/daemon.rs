@@ -70,20 +70,34 @@ fn compute_new(params: &IntervalParams) -> u64 {
 
     // Adjust for system idleness
     if params.is_system_idle {
-        // Progressive back-off based on idle time duration
-        let idle_time_mins = params.last_user_activity.as_secs() / 60;
+        let idle_time_seconds = params.last_user_activity.as_secs();
 
-        if idle_time_mins >= 1 {
-            // Logarithmic back-off starting after 1 minute of idleness
-            // Use log base 2 to double the interval for each power of 2 minutes of idle time
-            // Example: 1min->1.5x, 2min->2x, 4min->3x, 8min->4x, 16min->5x, etc.
-            let idle_factor = 1.0 + (idle_time_mins as f32).log2().max(0.5);
+        // Apply adjustment only if the system has been idle for a non-zero duration.
+        // The factor starts at 1.0 for 0 seconds idle time and increases.
+        if idle_time_seconds > 0 {
+            let idle_factor = if idle_time_seconds < 120 {
+                // Less than 2 minutes (0 to 119 seconds)
+                // Linear interpolation from 1.0 (at 0s) to 2.0 (at 120s).
+                // Value at 60s (1 min) = 1.0 + 60.0/120.0 = 1.5.
+                // This should provide a smooth transition from no multiplier (or 1.0x)
+                // up to the point where the logarithmic scale takes over at 2 minutes.
+                1.0 + (idle_time_seconds as f32) / 120.0
+            } else {
+                // 2 minutes (120 seconds) or more
+                let idle_time_minutes = idle_time_seconds / 60;
+                // At 2 minutes (120s), (2_f32).log2() = 1.0. So, factor = 1.0 + 1.0 = 2.0.
+                1.0 + (idle_time_minutes as f32).log2().max(0.5)
+            };
 
             // Cap the multiplier to avoid excessive intervals
-            let capped_factor = idle_factor.min(5.0);
+            let capped_factor = idle_factor.min(5.0); // max factor of 5x
 
             debug!(
-                "System idle for {idle_time_mins} minutes, applying idle factor: {capped_factor:.1}x"
+                "System idle for {} seconds (approx. {} minutes), applying idle factor: {:.2}x (raw: {:.2}x)",
+                idle_time_seconds,
+                (idle_time_seconds as f32 / 60.0).round(),
+                capped_factor,
+                idle_factor
             );
 
             let multiplied = adjusted_interval as f64 * f64::from(capped_factor);
@@ -93,10 +107,10 @@ fn compute_new(params: &IntervalParams) -> u64 {
                 multiplied.round() as u64
             };
         }
+        // If idle_time_seconds is 0, no factor is applied by this block, effectively 1.0x.
     }
 
     // Adjust for CPU/temperature volatility
-    // If either CPU usage or temperature is changing rapidly, decrease interval
     if params.cpu_volatility > 10.0 || params.temp_volatility > 2.0 {
         // XXX: This operation reduces the interval, so overflow is not an issue.
         // Using f64 for precision in multiplication before rounding.
