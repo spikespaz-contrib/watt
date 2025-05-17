@@ -256,7 +256,7 @@ impl SystemHistory {
         }
 
         // Update system state tracking
-        let new_state = determine_system_state(report);
+        let new_state = determine_system_state(report, self);
         if new_state != self.current_state {
             // Record time spent in previous state
             let time_in_state = self.last_state_change.elapsed();
@@ -580,7 +580,7 @@ enum SystemState {
 }
 
 /// Determine the current system state for adaptive polling
-fn determine_system_state(report: &SystemReport) -> SystemState {
+fn determine_system_state(report: &SystemReport, history: &SystemHistory) -> SystemState {
     // Check power state first
     if !report.batteries.is_empty() {
         if let Some(battery) = report.batteries.first() {
@@ -603,14 +603,8 @@ fn determine_system_state(report: &SystemReport) -> SystemState {
         }
     }
 
-    // Check idle state by checking very low CPU usage
-    let is_idle = report
-        .cpu_cores
-        .iter()
-        .filter_map(|c| c.usage_percent)
-        .all(|usage| usage < 5.0);
-
-    if is_idle {
+    // Check idle state
+    if history.is_system_idle() {
         return SystemState::Idle;
     }
 
