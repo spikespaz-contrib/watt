@@ -1,7 +1,10 @@
 [package]
 name = "superfreq"
+description = "Modern CPU frequency and power management utility for Linux"
 version = "0.2.0"
 edition = "2024"
+authors = ["NotAShelf <raf@notashelf.dev>"]
+rust-version = "1.85"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
