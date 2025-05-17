@@ -71,7 +71,7 @@ fn compute_new(params: &IntervalParams) -> u64 {
     // Adjust for CPU/temperature volatility
     // If either CPU usage or temperature is changing rapidly, decrease interval
     if params.cpu_volatility > 10.0 || params.temp_volatility > 2.0 {
-        adjusted_interval = (adjusted_interval as f32 * 0.5) as u64;
+        adjusted_interval = ((adjusted_interval as f32 * 0.5).round()).max(1.0) as u64;
     }
 
     // Ensure interval stays within configured bounds
@@ -193,7 +193,8 @@ impl SystemHistory {
                     let elapsed_hours = last_timestamp.elapsed().as_secs_f32() / 3600.0;
                     // Only calculate discharge rate if at least 30 seconds have passed
                     // and we're not on AC power
-                    if elapsed_hours > 0.0083 && !battery.ac_connected { // 0.0083 hours = 30 seconds
+                    if elapsed_hours > 0.0083 && !battery.ac_connected {
+                        // 0.0083 hours = 30 seconds
                         // Calculate discharge rate in percent per hour
                         let percent_change = last_percentage - current_percent;
                         if percent_change > 0.0 {
