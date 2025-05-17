@@ -414,7 +414,11 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
     };
 
     // Variables for adaptive polling
-    let mut current_poll_interval = config.daemon.poll_interval_sec;
+    // Mak sure that the poll interval is *never* zero in order to prevent a busy loop
+    let mut current_poll_interval = config.daemon.poll_interval_sec.max(1);
+    if config.daemon.poll_interval_sec == 0 {
+        warn!("Poll interval is set to zero in config, using 1s minimum to prevent a busy loop");
+    }
     let mut system_history = SystemHistory::default();
 
     // Main loop
@@ -429,7 +433,12 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                         info!("Config file changed, updating configuration");
                         config = new_config;
                         // Reset polling interval after config change
-                        current_poll_interval = config.daemon.poll_interval_sec;
+                        current_poll_interval = config.daemon.poll_interval_sec.max(1);
+                        if config.daemon.poll_interval_sec == 0 {
+                            warn!(
+                                "Poll interval is set to zero in updated config, using 1s minimum to prevent a busy loop"
+                            );
+                        }
                         // Mark this as a system event for adaptive polling
                         system_history.last_user_activity = Instant::now();
                     }
@@ -502,9 +511,12 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                 } else {
                     // If adaptive polling is disabled, still apply battery-saving adjustment
                     if config.daemon.throttle_on_battery && on_battery {
-                        let battery_multiplier = 2; // Poll half as often on battery
-                        current_poll_interval = (config.daemon.poll_interval_sec
-                            * battery_multiplier)
+                        let battery_multiplier = 2; // poll half as often on battery
+
+                        // We need to make sure `poll_interval_sec` is *at least* 1
+                        // before multiplying.
+                        let safe_interval = config.daemon.poll_interval_sec.max(1);
+                        current_poll_interval = (safe_interval * battery_multiplier)
                             .min(config.daemon.max_poll_interval_sec);
 
                         debug!(
@@ -512,7 +524,10 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
                         );
                     } else {
                         // Use the configured poll interval
-                        current_poll_interval = config.daemon.poll_interval_sec;
+                        current_poll_interval = config.daemon.poll_interval_sec.max(1);
+                        if config.daemon.poll_interval_sec == 0 {
+                            debug!("Using minimum poll interval of 1s instead of configured 0s");
+                        }
                     }
                 }
             }
