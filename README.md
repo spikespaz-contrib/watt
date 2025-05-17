@@ -20,9 +20,9 @@ Superfreq is a modern CPU frequency and power management utility for Linux
 systems. It provides intelligent control of CPU governors, frequencies, and
 power-saving features, helping optimize both performance and battery life.
 
-It is greatly inspired by auto_cpufreq, but rewritten from ground up to provide
+It is greatly inspired by auto-cpufreq, but rewritten from ground up to provide
 a smoother experience with a more efficient and more correct codebase. Some
-features are omitted, and it is _not_ a drop-in replacement for auto_cpufreq,
+features are omitted, and it is _not_ a drop-in replacement for auto-cpufreq,
 but most common usecases are already implemented.
 
 ## Features
@@ -238,6 +238,22 @@ performance for demanding tasks while conserving energy during light workloads.
 > [!TIP]
 > You can disable this logic with `enable_auto_turbo = false` to let the system
 > handle turbo boost natively when `turbo = "auto"`.
+
+#### Turbo Boost Behavior Table
+
+The table below explains how different combinations of `turbo` and
+`enable_auto_turbo` settings affect CPU turbo behavior:
+
+| Setting            | `enable_auto_turbo = true`                                                                               | `enable_auto_turbo = false`                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `turbo = "always"` | **Always enabled**<br>Turbo is always active regardless of CPU load or temperature                       | **Always enabled**<br>Turbo is always active regardless of CPU load or temperature                           |
+| `turbo = "never"`  | **Always disabled**<br>Turbo is always disabled regardless of CPU load or temperature                    | **Always disabled**<br>Turbo is always disabled regardless of CPU load or temperature                        |
+| `turbo = "auto"`   | **Dynamically managed**<br>Superfreq enables/disables turbo based on CPU load and temperature thresholds | **System default**<br>Turbo is reset to system's default enabled state and is managed by the hardware/kernel |
+
+> [!NOTE]
+> When `turbo = "auto"` and `enable_auto_turbo = false`, Superfreq ensures that
+> any previous turbo state restrictions are removed, allowing the
+> hardware/kernel to manage turbo behavior according to its default algorithms.
 
 ### Adaptive Polling
 
