@@ -191,13 +191,17 @@ impl SystemHistory {
                     (self.last_battery_percentage, self.last_battery_timestamp)
                 {
                     let elapsed_hours = last_timestamp.elapsed().as_secs_f32() / 3600.0;
-                    if elapsed_hours > 0.0 && !battery.ac_connected {
+                    // Only calculate discharge rate if at least 30 seconds have passed
+                    // and we're not on AC power
+                    if elapsed_hours > 0.0083 && !battery.ac_connected { // 0.0083 hours = 30 seconds
                         // Calculate discharge rate in percent per hour
                         let percent_change = last_percentage - current_percent;
                         if percent_change > 0.0 {
                             // Only if battery is discharging
                             let hourly_rate = percent_change / elapsed_hours;
-                            self.battery_discharge_rate = Some(hourly_rate);
+                            // Clamp the discharge rate to a reasonable maximum value (100%/hour)
+                            let clamped_rate = hourly_rate.min(100.0);
+                            self.battery_discharge_rate = Some(clamped_rate);
                         }
                     }
                 }
