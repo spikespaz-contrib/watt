@@ -10,7 +10,7 @@
   <br/>
   <a href="#what-is-superfreq">Synopsis</a><br/>
   <a href="#features">Features</a> | <a href="#usage">Usage</a><br/>
-  <a href="#Contributing">Contributing</a>
+  <a href="#contributing">Contributing</a>
   <br/>
 </div>
 
@@ -176,7 +176,8 @@ max_freq_mhz = 2500
 
 # Global battery charging thresholds (applied to both profiles unless overridden)
 # Start charging at 40%, stop at 80% - extends battery lifespan
-# NOTE: Profile-specific thresholds (in [charger] or [battery] sections) take precedence over this global setting
+# NOTE: Profile-specific thresholds (in [charger] or [battery] sections)
+# take precedence over this global setting
 battery_charge_thresholds = [40, 80]
 
 # Daemon configuration
@@ -210,11 +211,28 @@ create an issue.
 
 ### Adaptive Polling
 
-The daemon mode uses adaptive polling to balance responsiveness with efficiency:
+Superfreq includes a "sophisticated" (euphemism for complicated) adaptive
+polling system to try and maximize power efficiency
 
-- Increases polling frequency during system changes
-- Decreases polling frequency during stable periods
-- Reduces polling when on battery to save power
+- **Battery Discharge Analysis** - Automatically adjusts polling frequency based
+  on the battery discharge rate, reducing system activity when battery is
+  draining quickly
+- **System Activity Pattern Recognition** - Monitors CPU usage and temperature
+  patterns to identify system stability
+- **Dynamic Interval Calculation** - Uses multiple factors to determine optimal
+  polling intervals - up to 3x longer on battery with minimal user impact
+- **Idle Detection** - Significantly reduces polling frequency during extended
+  idle periods to minimize power consumption
+- **Gradual Transition** - Smooth transitions between polling rates to avoid
+  performance spikes
+- **Progressive Back-off** - Implements logarithmic back-off during idle periods
+  (1min -> 1.5x, 2min -> 2x, 4min -> 3x, 8min -> 4x, 16min -> 5x)
+- **Battery Discharge Protection** - Includes safeguards against measurement
+  noise to prevent erratic polling behavior
+
+When enabled, this intelligent polling system provides substantial power savings
+over conventional fixed-interval approaches, especially during low-activity or
+idle periods, while maintaining responsiveness when needed.
 
 ### Power Supply Filtering
 
@@ -257,11 +275,25 @@ the codebase as they stand.
 
 ### Setup
 
-You will need Cargo and Rust installed on your system. For Nix users, using
-Direnv is encouraged.
+You will need Cargo and Rust installed on your system. Rust 1.80 or later is required.
 
-Non-Nix users may get the appropriate Cargo andn Rust versions from their
-package manager.
+A `.envrc` is provided, and it's usage is encouraged for Nix users.
+Alternatively, you may use Nix for a reproducible developer environment
+
+```bash
+nix develop
+```
+
+Non-Nix users may get the appropriate Cargo and Rust versions from their package
+manager.
+
+### Formatting
+
+Please make sure to run _at least_ `cargo fmt` inside the repository to make
+sure all of your code is properly formatted. For Nix code, please use Alejandra.
+
+Clippy lints are not _required_ as of now, but a good rule of thumb to run them
+before committing to catch possible code smell early.
 
 ## License
 
