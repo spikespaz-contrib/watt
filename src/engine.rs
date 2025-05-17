@@ -117,7 +117,9 @@ pub fn determine_and_apply_settings(
                     debug!("Managing turbo in auto mode based on system conditions");
                     manage_auto_turbo(report, selected_profile_config)?;
                 } else {
-                    debug!("Auto turbo management disabled by configuration, using system default behavior");
+                    debug!(
+                        "Auto turbo management disabled by configuration, using system default behavior"
+                    );
                     try_apply_feature("Turbo boost", "system default (Auto)", || {
                         cpu::set_turbo(turbo_setting)
                     })?;
