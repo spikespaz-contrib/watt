@@ -163,20 +163,18 @@ impl SystemHistory {
     fn update(&mut self, report: &SystemReport) {
         // Update CPU usage history
         if !report.cpu_cores.is_empty() {
-            // Get average CPU usage across all cores
-            let total: f32 = report
-                .cpu_cores
-                .iter()
-                .filter_map(|core| core.usage_percent)
-                .sum();
-            let count = report
-                .cpu_cores
-                .iter()
-                .filter(|c| c.usage_percent.is_some())
-                .count();
+            let mut total_usage: f32 = 0.0;
+            let mut core_count: usize = 0;
 
-            if count > 0 {
-                let avg_usage = total / count as f32;
+            for core in &report.cpu_cores {
+                if let Some(usage) = core.usage_percent {
+                    total_usage += usage;
+                    core_count += 1;
+                }
+            }
+
+            if core_count > 0 {
+                let avg_usage = total_usage / core_count as f32;
 
                 // Keep only the last 5 measurements
                 if self.cpu_usage_history.len() >= 5 {
