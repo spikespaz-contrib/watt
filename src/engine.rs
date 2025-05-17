@@ -6,6 +6,46 @@ use crate::util::error::{ControlError, EngineError};
 use log::{debug, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Manage turbo boost hysteresis state.
+/// Contains the state needed to implement hysteresis
+/// for the dynamic turbo management feature
+struct TurboHysteresis {
+    /// Whether turbo was enabled in the previous cycle
+    previous_state: AtomicBool,
+    /// Whether the hysteresis state has been initialized
+    initialized: AtomicBool,
+}
+
+impl TurboHysteresis {
+    const fn new() -> Self {
+        Self {
+            previous_state: AtomicBool::new(false),
+            initialized: AtomicBool::new(false),
+        }
+    }
+
+    /// Get the previous turbo state, if initialized
+    fn get_previous_state(&self) -> Option<bool> {
+        if self.initialized.load(Ordering::Acquire) {
+            Some(self.previous_state.load(Ordering::Acquire))
+        } else {
+            None
+        }
+    }
+
+    /// Update the turbo state for hysteresis
+    fn update_state(&self, new_state: bool) {
+        self.previous_state.store(new_state, Ordering::Release);
+        self.initialized.store(true, Ordering::Release);
+    }
+}
+
+// Thread-local instance of TurboHysteresis for each profile
+thread_local! {
+    static CHARGER_TURBO_HYSTERESIS: TurboHysteresis = const { TurboHysteresis::new() };
+    static BATTERY_TURBO_HYSTERESIS: TurboHysteresis = const { TurboHysteresis::new() };
+}
+
 /// Try applying a CPU feature and handle common error cases. Centralizes the where we
 /// previously did:
 /// 1. Try to apply a feature setting
@@ -184,10 +224,6 @@ pub fn determine_and_apply_settings(
     Ok(())
 }
 
-// Keep track of current auto turbo state for hysteresis using thread-safe atomics
-static PREVIOUS_TURBO_STATE: AtomicBool = AtomicBool::new(false);
-static TURBO_STATE_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
 fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<(), EngineError> {
     // Get the auto turbo settings from the config, or use defaults
     let turbo_settings = config.turbo_auto_settings.clone().unwrap_or_default();
@@ -220,12 +256,16 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
     };
 
-    // Get previous state safely using atomic operations
-    let has_previous_state = TURBO_STATE_INITIALIZED.load(Ordering::Acquire);
-    let previous_turbo_enabled = if has_previous_state {
-        Some(PREVIOUS_TURBO_STATE.load(Ordering::Acquire))
+    // Use the appropriate hysteresis object based on whether we're on battery or AC power
+    // We don't have direct access to the AppConfig here, so we need to make a determination
+    // based on other factors like whether turbo_auto_settings are more conservative (typically battery profile)
+    // or by checking if temperature thresholds are lower (typically battery profile)
+    let is_on_ac = report.batteries.iter().any(|b| b.ac_connected);
+
+    let previous_turbo_enabled = if is_on_ac {
+        CHARGER_TURBO_HYSTERESIS.with(TurboHysteresis::get_previous_state)
     } else {
-        None
+        BATTERY_TURBO_HYSTERESIS.with(TurboHysteresis::get_previous_state)
     };
 
     // Decision logic for enabling/disabling turbo with hysteresis
@@ -273,9 +313,12 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
     };
 
-    // Save the current state for next time using atomic operations
-    PREVIOUS_TURBO_STATE.store(enable_turbo, Ordering::Release);
-    TURBO_STATE_INITIALIZED.store(true, Ordering::Release);
+    // Save the current state for next time using the appropriate thread-local hysteresis object
+    if is_on_ac {
+        CHARGER_TURBO_HYSTERESIS.with(|h| h.update_state(enable_turbo));
+    } else {
+        BATTERY_TURBO_HYSTERESIS.with(|h| h.update_state(enable_turbo));
+    }
 
     // Apply the turbo setting
     let turbo_setting = if enable_turbo {
