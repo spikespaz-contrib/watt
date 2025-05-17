@@ -131,6 +131,7 @@ fn compute_new(params: &IntervalParams) -> u64 {
 }
 
 /// Tracks historical system data for "advanced" adaptive polling
+#[derive(Debug)]
 struct SystemHistory {
     /// Last several CPU usage measurements
     cpu_usage_history: VecDeque<f32>,
@@ -152,21 +153,23 @@ struct SystemHistory {
     current_state: SystemState,
 }
 
-impl SystemHistory {
-    fn new() -> Self {
+impl Default for SystemHistory {
+    fn default() -> Self {
         Self {
-            cpu_usage_history: VecDeque::with_capacity(5),
-            temperature_history: VecDeque::with_capacity(5),
+            cpu_usage_history: VecDeque::new(),
+            temperature_history: VecDeque::new(),
             last_user_activity: Instant::now(),
             last_battery_percentage: None,
             last_battery_timestamp: None,
             battery_discharge_rate: None,
             state_durations: std::collections::HashMap::new(),
             last_state_change: Instant::now(),
-            current_state: SystemState::Unknown,
+            current_state: SystemState::default(),
         }
     }
+}
 
+impl SystemHistory {
     /// Update system history with new report data
     fn update(&mut self, report: &SystemReport) {
         // Update CPU usage history
@@ -422,7 +425,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
 
     // Variables for adaptive polling
     let mut current_poll_interval = config.daemon.poll_interval_sec;
-    let mut system_history = SystemHistory::new();
+    let mut system_history = SystemHistory::default();
 
     // Main loop
     while running.load(Ordering::SeqCst) {
@@ -574,8 +577,9 @@ fn write_stats_file(path: &str, report: &SystemReport) -> Result<(), std::io::Er
 }
 
 /// Simplified system state used for determining when to adjust polling interval
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Default)]
 enum SystemState {
+    #[default]
     Unknown,
     OnAC,
     OnBattery,
