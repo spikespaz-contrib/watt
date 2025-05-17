@@ -68,27 +68,17 @@ fn compute_new(params: &IntervalParams) -> u64 {
         // Apply a multiplier based on battery discharge rate
         if let Some(discharge_rate) = params.battery_discharge_rate {
             if discharge_rate > 20.0 {
-                // High discharge rate - increase polling interval significantly
-                let multiplied = adjusted_interval as f64 * 3.0;
-                adjusted_interval = if multiplied >= u64::MAX as f64 {
-                    u64::MAX
-                } else {
-                    multiplied.round() as u64
-                };
+                // High discharge rate - increase polling interval significantly (3x)
+                adjusted_interval = adjusted_interval.saturating_mul(3);
             } else if discharge_rate > 10.0 {
-                // Moderate discharge - double polling interval
+                // Moderate discharge - double polling interval (2x)
                 adjusted_interval = adjusted_interval.saturating_mul(2);
             } else {
-                // Low discharge rate - increase by 50%
-                let multiplied = adjusted_interval as f64 * 1.5;
-                adjusted_interval = if multiplied >= u64::MAX as f64 {
-                    u64::MAX
-                } else {
-                    multiplied.round() as u64
-                };
+                // Low discharge rate - increase by 50% (multiply by 3/2)
+                adjusted_interval = adjusted_interval.saturating_mul(3).saturating_div(2);
             }
         } else {
-            // If we don't know discharge rate, use a conservative multiplier
+            // If we don't know discharge rate, use a conservative multiplier (2x)
             adjusted_interval = adjusted_interval.saturating_mul(2);
         }
     }
@@ -108,22 +98,22 @@ fn compute_new(params: &IntervalParams) -> u64 {
                 idle_factor
             );
 
-            let multiplied = adjusted_interval as f64 * f64::from(idle_factor);
-            adjusted_interval = if multiplied >= u64::MAX as f64 {
-                u64::MAX
-            } else {
-                multiplied.round() as u64
-            };
+            // Convert f32 multiplier to integer-safe math
+            // Multiply by a large number first, then divide to maintain precision
+            // Use 1000 as the scaling factor to preserve up to 3 decimal places
+            let scaling_factor = 1000;
+            let scaled_factor = (idle_factor * scaling_factor as f32) as u64;
+            adjusted_interval = adjusted_interval
+                .saturating_mul(scaled_factor)
+                .saturating_div(scaling_factor);
         }
         // If idle_time_seconds is 0, no factor is applied by this block
     }
 
     // Adjust for CPU/temperature volatility
     if params.cpu_volatility > 10.0 || params.temp_volatility > 2.0 {
-        // XXX: This operation reduces the interval, so overflow is not an issue.
-        // Using f64 for precision in multiplication before rounding.
-        // Max with 1 to prevent zero interval before final clamp.
-        adjusted_interval = ((adjusted_interval as f64 * 0.5).round() as u64).max(1);
+        // For division by 2 (halving the interval), we can safely use integer division
+        adjusted_interval = (adjusted_interval / 2).max(1);
     }
 
     // Ensure interval stays within configured bounds
