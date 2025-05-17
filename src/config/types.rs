@@ -171,12 +171,15 @@ pub struct TurboAutoSettings {
     pub load_threshold_low: f32,
     #[serde(default = "default_temp_threshold_high")]
     pub temp_threshold_high: f32,
+    #[serde(default = "default_initial_turbo_state")]
+    pub initial_turbo_state: bool,
 }
 
 // Default thresholds for Auto turbo mode
 pub const DEFAULT_LOAD_THRESHOLD_HIGH: f32 = 70.0; // enable turbo if load is above this
 pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // disable turbo if load is below this
 pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // disable turbo if temperature is above this
+pub const DEFAULT_INITIAL_TURBO_STATE: bool = false; // by default, start with turbo disabled
 
 const fn default_load_threshold_high() -> f32 {
     DEFAULT_LOAD_THRESHOLD_HIGH
@@ -187,6 +190,9 @@ const fn default_load_threshold_low() -> f32 {
 const fn default_temp_threshold_high() -> f32 {
     DEFAULT_TEMP_THRESHOLD_HIGH
 }
+const fn default_initial_turbo_state() -> bool {
+    DEFAULT_INITIAL_TURBO_STATE
+}
 
 impl Default for TurboAutoSettings {
     fn default() -> Self {
@@ -194,6 +200,7 @@ impl Default for TurboAutoSettings {
             load_threshold_high: DEFAULT_LOAD_THRESHOLD_HIGH,
             load_threshold_low: DEFAULT_LOAD_THRESHOLD_LOW,
             temp_threshold_high: DEFAULT_TEMP_THRESHOLD_HIGH,
+            initial_turbo_state: DEFAULT_INITIAL_TURBO_STATE,
         }
     }
 }

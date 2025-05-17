@@ -33,6 +33,16 @@ impl TurboHysteresis {
         }
     }
 
+    /// Initialize the state with a specific value if not already initialized
+    fn initialize_with(&self, initial_state: bool) -> bool {
+        if !self.initialized.load(Ordering::Acquire) {
+            self.previous_state.store(initial_state, Ordering::Release);
+            self.initialized.store(true, Ordering::Release);
+            return initial_state;
+        }
+        self.previous_state.load(Ordering::Acquire)
+    }
+
     /// Update the turbo state for hysteresis
     fn update_state(&self, new_state: bool) {
         self.previous_state.store(new_state, Ordering::Release);
@@ -257,15 +267,27 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     };
 
     // Use the appropriate hysteresis object based on whether we're on battery or AC power
-    // We don't have direct access to the AppConfig here, so we need to make a determination
-    // based on other factors like whether turbo_auto_settings are more conservative (typically battery profile)
-    // or by checking if temperature thresholds are lower (typically battery profile)
     let is_on_ac = report.batteries.iter().any(|b| b.ac_connected);
 
+    // Get the previous state or initialize with the configured initial state
     let previous_turbo_enabled = if is_on_ac {
-        CHARGER_TURBO_HYSTERESIS.with(TurboHysteresis::get_previous_state)
+        CHARGER_TURBO_HYSTERESIS.with(|h| {
+            if let Some(state) = h.get_previous_state() {
+                Some(state)
+            } else {
+                // Initialize with the configured initial state and return it
+                Some(h.initialize_with(turbo_settings.initial_turbo_state))
+            }
+        })
     } else {
-        BATTERY_TURBO_HYSTERESIS.with(TurboHysteresis::get_previous_state)
+        BATTERY_TURBO_HYSTERESIS.with(|h| {
+            if let Some(state) = h.get_previous_state() {
+                Some(state)
+            } else {
+                // Initialize with the configured initial state and return it
+                Some(h.initialize_with(turbo_settings.initial_turbo_state))
+            }
+        })
     };
 
     // Decision logic for enabling/disabling turbo with hysteresis
@@ -306,10 +328,17 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
             );
             prev_state
         }
-        // In indeterminate states or unknown previous state, default to disabled
+        // In indeterminate states or unknown previous state, use the configured initial state
         _ => {
-            info!("Auto Turbo: Disabled (default for indeterminate state)");
-            false
+            info!(
+                "Auto Turbo: Using configured initial state ({})",
+                if turbo_settings.initial_turbo_state {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            turbo_settings.initial_turbo_state
         }
     };
 
