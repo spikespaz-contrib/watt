@@ -219,9 +219,9 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     };
 
     // Get previous state safely using atomic operations
-    let has_previous_state = TURBO_STATE_INITIALIZED.load(Ordering::Relaxed);
+    let has_previous_state = TURBO_STATE_INITIALIZED.load(Ordering::Acquire);
     let previous_turbo_enabled = if has_previous_state {
-        Some(PREVIOUS_TURBO_STATE.load(Ordering::Relaxed))
+        Some(PREVIOUS_TURBO_STATE.load(Ordering::Acquire))
     } else {
         None
     };
@@ -272,8 +272,8 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     };
 
     // Save the current state for next time using atomic operations
-    PREVIOUS_TURBO_STATE.store(enable_turbo, Ordering::Relaxed);
-    TURBO_STATE_INITIALIZED.store(true, Ordering::Relaxed);
+    PREVIOUS_TURBO_STATE.store(enable_turbo, Ordering::Release);
+    TURBO_STATE_INITIALIZED.store(true, Ordering::Release);
 
     // Apply the turbo setting
     let turbo_setting = if enable_turbo {
