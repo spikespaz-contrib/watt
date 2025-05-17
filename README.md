@@ -10,7 +10,7 @@
   <br/>
   <a href="#what-is-superfreq">Synopsis</a><br/>
   <a href="#features">Features</a> | <a href="#usage">Usage</a><br/>
-  <a href="#Contributing">Contributing</a>
+  <a href="#contributing">Contributing</a>
   <br/>
 </div>
 
@@ -275,7 +275,7 @@ the codebase as they stand.
 
 ### Setup
 
-You will need Cargo and Rust installed on your system. Rust > 1.80 is required.
+You will need Cargo and Rust installed on your system. Rust 1.80 or later is required.
 
 A `.envrc` is provided, and it's usage is encouraged for Nix users.
 Alternatively, you may use Nix for a reproducible developer environment
