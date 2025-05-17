@@ -1,6 +1,7 @@
 use crate::core::{GovernorOverrideMode, TurboSetting};
 use crate::util::error::ControlError;
 use core::str;
+use log::debug;
 use std::{fs, io, path::Path, string::ToString};
 
 pub type Result<T, E = ControlError> = std::result::Result<T, E>;
@@ -216,12 +217,19 @@ pub fn set_turbo(setting: TurboSetting) -> Result<()> {
     let value_pstate = match setting {
         TurboSetting::Always => "0", // no_turbo = 0 means turbo is enabled
         TurboSetting::Never => "1",  // no_turbo = 1 means turbo is disabled
-        TurboSetting::Auto => return Err(ControlError::InvalidValueError("Turbo Auto cannot be directly set via intel_pstate/no_turbo or cpufreq/boost. System default.".to_string())),
+        // Auto mode is handled at the engine level, not directly at the sysfs level
+        TurboSetting::Auto => {
+            debug!("Turbo Auto mode is managed by engine logic based on system conditions");
+            return Ok(());
+        }
     };
     let value_boost = match setting {
         TurboSetting::Always => "1", // boost = 1 means turbo is enabled
         TurboSetting::Never => "0",  // boost = 0 means turbo is disabled
-        TurboSetting::Auto => return Err(ControlError::InvalidValueError("Turbo Auto cannot be directly set via intel_pstate/no_turbo or cpufreq/boost. System default.".to_string())),
+        TurboSetting::Auto => {
+            debug!("Turbo Auto mode is managed by engine logic based on system conditions");
+            return Ok(());
+        }
     };
 
     // AMD specific paths
