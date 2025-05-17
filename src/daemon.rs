@@ -414,7 +414,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), Box<dyn st
     };
 
     // Variables for adaptive polling
-    // Mak sure that the poll interval is *never* zero in order to prevent a busy loop
+    // Make sure that the poll interval is *never* zero to prevent a busy loop
     let mut current_poll_interval = config.daemon.poll_interval_sec.max(1);
     if config.daemon.poll_interval_sec == 0 {
         warn!("Poll interval is set to zero in config, using 1s minimum to prevent a busy loop");
@@ -623,7 +623,7 @@ fn determine_system_state(report: &SystemReport, history: &SystemHistory) -> Sys
     if avg_load > 3.0 {
         return SystemState::HighLoad;
     }
-    
+
     // Check idle state only if we don't have high load
     if history.is_system_idle() {
         return SystemState::Idle;
