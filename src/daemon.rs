@@ -60,11 +60,24 @@ fn compute_new(params: &IntervalParams) -> u64 {
 
     // Adjust for system idleness
     if params.is_system_idle {
-        // If the system has been idle for a while, increase interval
-        let idle_time = params.last_user_activity.as_secs();
-        if idle_time > 300 {
-            // 5 minutes
-            adjusted_interval = (adjusted_interval as f32 * 2.0) as u64;
+        // Progressive back-off based on idle time duration
+        let idle_time_minutes = params.last_user_activity.as_secs() / 60;
+
+        if idle_time_minutes >= 1 {
+            // Logarithmic back-off starting after 1 minute of idleness
+            // Use log base 2 to double the interval for each power of 2 minutes of idle time
+            // Example: 1min->1.5x, 2min->2x, 4min->3x, 8min->4x, 16min->5x, etc.
+            let idle_factor = 1.0 + (idle_time_minutes as f32).log2().max(0.5);
+
+            // Cap the multiplier to avoid excessive intervals
+            let capped_factor = idle_factor.min(5.0);
+
+            debug!(
+                "System idle for {} minutes, applying idle factor: {:.1}x",
+                idle_time_minutes, capped_factor
+            );
+
+            adjusted_interval = (adjusted_interval as f32 * capped_factor) as u64;
         }
     }
 
