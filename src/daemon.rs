@@ -44,54 +44,71 @@ fn compute_new(params: &IntervalParams) -> u64 {
         if let Some(discharge_rate) = params.battery_discharge_rate {
             if discharge_rate > 20.0 {
                 // High discharge rate - increase polling interval significantly
-                adjusted_interval = (adjusted_interval as f32 * 3.0) as u64;
+                let multiplied = adjusted_interval as f64 * 3.0;
+                adjusted_interval = if multiplied >= u64::MAX as f64 {
+                    u64::MAX
+                } else {
+                    multiplied.round() as u64
+                };
             } else if discharge_rate > 10.0 {
                 // Moderate discharge - double polling interval
-                adjusted_interval *= 2;
+                adjusted_interval = adjusted_interval.saturating_mul(2);
             } else {
                 // Low discharge rate - increase by 50%
-                adjusted_interval = (adjusted_interval as f32 * 1.5) as u64;
+                let multiplied = adjusted_interval as f64 * 1.5;
+                adjusted_interval = if multiplied >= u64::MAX as f64 {
+                    u64::MAX
+                } else {
+                    multiplied.round() as u64
+                };
             }
         } else {
             // If we don't know discharge rate, use a conservative multiplier
-            adjusted_interval *= 2;
+            adjusted_interval = adjusted_interval.saturating_mul(2);
         }
     }
 
     // Adjust for system idleness
     if params.is_system_idle {
         // Progressive back-off based on idle time duration
-        let idle_time_minutes = params.last_user_activity.as_secs() / 60;
+        let idle_time_mins = params.last_user_activity.as_secs() / 60;
 
-        if idle_time_minutes >= 1 {
+        if idle_time_mins >= 1 {
             // Logarithmic back-off starting after 1 minute of idleness
             // Use log base 2 to double the interval for each power of 2 minutes of idle time
             // Example: 1min->1.5x, 2min->2x, 4min->3x, 8min->4x, 16min->5x, etc.
-            let idle_factor = 1.0 + (idle_time_minutes as f32).log2().max(0.5);
+            let idle_factor = 1.0 + (idle_time_mins as f32).log2().max(0.5);
 
             // Cap the multiplier to avoid excessive intervals
             let capped_factor = idle_factor.min(5.0);
 
             debug!(
-                "System idle for {} minutes, applying idle factor: {:.1}x",
-                idle_time_minutes, capped_factor
+                "System idle for {idle_time_mins} minutes, applying idle factor: {capped_factor:.1}x"
             );
 
-            adjusted_interval = (adjusted_interval as f32 * capped_factor) as u64;
+            let multiplied = adjusted_interval as f64 * f64::from(capped_factor);
+            adjusted_interval = if multiplied >= u64::MAX as f64 {
+                u64::MAX
+            } else {
+                multiplied.round() as u64
+            };
         }
     }
 
     // Adjust for CPU/temperature volatility
     // If either CPU usage or temperature is changing rapidly, decrease interval
     if params.cpu_volatility > 10.0 || params.temp_volatility > 2.0 {
-        adjusted_interval = ((adjusted_interval as f32 * 0.5).round()).max(1.0) as u64;
+        // XXX: This operation reduces the interval, so overflow is not an issue.
+        // Using f64 for precision in multiplication before rounding.
+        // Max with 1 to prevent zero interval before final clamp.
+        adjusted_interval = ((adjusted_interval as f64 * 0.5).round() as u64).max(1);
     }
 
     // Ensure interval stays within configured bounds
     adjusted_interval.clamp(params.min_interval, params.max_interval)
 }
 
-/// Tracks historical system data for advanced adaptive polling
+/// Tracks historical system data for "advanced" adaptive polling
 struct SystemHistory {
     /// Last several CPU usage measurements
     cpu_usage_history: VecDeque<f32>,
