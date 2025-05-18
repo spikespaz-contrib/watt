@@ -168,13 +168,13 @@ pub fn determine_and_apply_settings(
 
     // Determine AC/Battery status once, early in the function
     // For desktops (no batteries), we should always use the AC power profile
-    // For laptops, we check if any battery is present and not connected to AC
+    // For laptops, we check if all batteries report connected to AC
     let on_ac_power = if report.batteries.is_empty() {
         // No batteries means desktop/server, always on AC
         true
     } else {
-        // Check if any battery reports AC connected
-        report.batteries.iter().any(|b| b.ac_connected)
+        // Check if all batteries report AC connected
+        report.batteries.iter().all(|b| b.ac_connected)
     };
 
     let selected_profile_config: &ProfileConfig;
