@@ -60,7 +60,25 @@ fn idle_multiplier(idle_secs: u64) -> f32 {
 }
 
 /// Calculate optimal polling interval based on system conditions and history
-fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
+///
+/// Returns Ok with the calculated interval, or Err if the configuration is invalid
+fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> Result<u64, String> {
+    // Catch invalid configurations during development
+    debug_assert!(
+        params.max_interval >= params.min_interval,
+        "Configuration error: max_interval ({}) < min_interval ({})",
+        params.max_interval,
+        params.min_interval
+    );
+
+    // Return an error on invalid configuration
+    if !validate_poll_intervals(params.min_interval, params.max_interval) {
+        return Err(format!(
+            "Invalid interval configuration: max_interval ({}) is less than min_interval ({})",
+            params.max_interval, params.min_interval
+        ));
+    }
+
     // Start with base interval
     let mut adjusted_interval = params.base_interval;
 
@@ -117,7 +135,6 @@ fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
         adjusted_interval = (adjusted_interval / 2).max(1);
     }
 
-    // Ensure interval stays within configured bounds
     // Enforce a minimum of 1 second to prevent busy loops, regardless of params.min_interval
     let min_safe_interval = params.min_interval.max(1);
     let new_interval = adjusted_interval.clamp(min_safe_interval, params.max_interval);
@@ -142,7 +159,7 @@ fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
 
     // Blended result still needs to respect the configured bounds
     // Again enforce minimum of 1 second regardless of params.min_interval
-    blended_interval.clamp(min_safe_interval, params.max_interval)
+    Ok(blended_interval.clamp(min_safe_interval, params.max_interval))
 }
 
 /// Tracks historical system data for "advanced" adaptive polling
@@ -358,7 +375,11 @@ impl SystemHistory {
     }
 
     /// Calculate optimal polling interval based on system conditions
-    fn calculate_optimal_interval(&self, config: &AppConfig, on_battery: bool) -> u64 {
+    fn calculate_optimal_interval(
+        &self,
+        config: &AppConfig,
+        on_battery: bool,
+    ) -> Result<u64, String> {
         let params = IntervalParams {
             base_interval: config.daemon.poll_interval_sec,
             min_interval: config.daemon.min_poll_interval_sec,
@@ -373,6 +394,12 @@ impl SystemHistory {
 
         compute_new(&params, self)
     }
+}
+
+/// Validates that poll interval configuration is consistent
+/// Returns true if configuration is valid, false if invalid
+fn validate_poll_intervals(min_interval: u64, max_interval: u64) -> bool {
+    max_interval >= min_interval
 }
 
 /// Run the daemon
@@ -396,6 +423,17 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
     log::set_max_level(level_filter);
 
     info!("Starting superfreq daemon...");
+
+    // Validate critical configuration values before proceeding
+    if !validate_poll_intervals(
+        config.daemon.min_poll_interval_sec,
+        config.daemon.max_poll_interval_sec,
+    ) {
+        return Err(AppError::Generic(format!(
+            "Invalid configuration: max_poll_interval_sec ({}) is less than min_poll_interval_sec ({}). Please fix your configuration.",
+            config.daemon.max_poll_interval_sec, config.daemon.min_poll_interval_sec
+        )));
+    }
 
     // Create a flag that will be set to true when a signal is received
     let running = Arc::new(AtomicBool::new(true));
@@ -465,6 +503,21 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
                 match config_result {
                     Ok(new_config) => {
                         info!("Config file changed, updating configuration");
+
+                        // Validate min/max intervals in the new configuration
+                        if !validate_poll_intervals(
+                            new_config.daemon.min_poll_interval_sec,
+                            new_config.daemon.max_poll_interval_sec,
+                        ) {
+                            error!(
+                                "Invalid configuration loaded: max_poll_interval_sec ({}) is less than min_poll_interval_sec ({}). Keeping previous configuration.",
+                                new_config.daemon.max_poll_interval_sec,
+                                new_config.daemon.min_poll_interval_sec
+                            );
+                            // Continue with the current configuration
+                            continue;
+                        }
+
                         config = new_config;
                         // Reset polling interval after config change
                         current_poll_interval = config.daemon.poll_interval_sec.max(1);
@@ -533,30 +586,38 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
                         || (system_history.last_cpu_volatility - current_cpu_volatility).abs() > 1.0
                         || u64::abs_diff(system_history.last_idle_secs, current_idle_secs) > 10
                     {
-                        let optimal_interval =
-                            system_history.calculate_optimal_interval(&config, on_battery);
+                        match system_history.calculate_optimal_interval(&config, on_battery) {
+                            Ok(optimal_interval) => {
+                                // Store the new interval and update cached metrics
+                                system_history.last_computed_interval = Some(optimal_interval);
+                                system_history.last_cpu_volatility = current_cpu_volatility;
+                                system_history.last_idle_secs = current_idle_secs;
 
-                        // Store the new interval and update cached metrics
-                        system_history.last_computed_interval = Some(optimal_interval);
-                        system_history.last_cpu_volatility = current_cpu_volatility;
-                        system_history.last_idle_secs = current_idle_secs;
+                                debug!(
+                                    "Recalculated optimal interval: {optimal_interval}s (significant system change detected)"
+                                );
 
-                        debug!(
-                            "Recalculated optimal interval: {optimal_interval}s (significant system change detected)"
-                        );
-
-                        // Don't change the interval too dramatically at once
-                        match optimal_interval.cmp(&current_poll_interval) {
-                            std::cmp::Ordering::Greater => {
-                                current_poll_interval =
-                                    (current_poll_interval + optimal_interval) / 2;
+                                // Don't change the interval too dramatically at once
+                                match optimal_interval.cmp(&current_poll_interval) {
+                                    std::cmp::Ordering::Greater => {
+                                        current_poll_interval =
+                                            (current_poll_interval + optimal_interval) / 2;
+                                    }
+                                    std::cmp::Ordering::Less => {
+                                        current_poll_interval = current_poll_interval
+                                            - ((current_poll_interval - optimal_interval) / 2)
+                                                .max(1);
+                                    }
+                                    std::cmp::Ordering::Equal => {
+                                        // No change needed when they're equal
+                                    }
+                                }
                             }
-                            std::cmp::Ordering::Less => {
-                                current_poll_interval = current_poll_interval
-                                    - ((current_poll_interval - optimal_interval) / 2).max(1);
-                            }
-                            std::cmp::Ordering::Equal => {
-                                // No change needed when they're equal
+                            Err(e) => {
+                                // Log the error and stop the daemon when an invalid configuration is detected
+                                error!("Critical configuration error: {e}");
+                                running.store(false, Ordering::SeqCst);
+                                break;
                             }
                         }
                     } else {

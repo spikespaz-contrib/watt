@@ -82,8 +82,7 @@ pub fn load_config_from_path(specific_path: Option<&str>) -> Result<AppConfig, C
 fn load_and_parse_config(path: &Path) -> Result<AppConfig, ConfigError> {
     let contents = fs::read_to_string(path).map_err(ConfigError::Io)?;
 
-    let toml_app_config =
-        toml::from_str::<AppConfigToml>(&contents).map_err(ConfigError::Toml)?;
+    let toml_app_config = toml::from_str::<AppConfigToml>(&contents).map_err(ConfigError::Toml)?;
 
     // Handle inheritance of values from global to profile configs
     let mut charger_profile = toml_app_config.charger.clone();
