@@ -4,6 +4,116 @@ use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
 use crate::util::error::{ControlError, EngineError};
 use log::{debug, info, warn};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Track turbo boost state for AC and battery power modes
+struct TurboHysteresisStates {
+    /// State for when on AC power
+    charger: TurboHysteresis,
+    /// State for when on battery power
+    battery: TurboHysteresis,
+}
+
+impl TurboHysteresisStates {
+    const fn new() -> Self {
+        Self {
+            charger: TurboHysteresis::new(),
+            battery: TurboHysteresis::new(),
+        }
+    }
+
+    const fn get_for_power_state(&self, is_on_ac: bool) -> &TurboHysteresis {
+        if is_on_ac {
+            &self.charger
+        } else {
+            &self.battery
+        }
+    }
+}
+
+static TURBO_STATES: OnceLock<TurboHysteresisStates> = OnceLock::new();
+
+/// Get or initialize the global turbo states
+fn get_turbo_states() -> &'static TurboHysteresisStates {
+    TURBO_STATES.get_or_init(TurboHysteresisStates::new)
+}
+
+/// Manage turbo boost hysteresis state.
+/// Contains the state needed to implement hysteresis
+/// for the dynamic turbo management feature
+struct TurboHysteresis {
+    /// Whether turbo was enabled in the previous cycle
+    previous_state: AtomicBool,
+    /// Whether the hysteresis state has been initialized
+    initialized: AtomicBool,
+}
+
+impl TurboHysteresis {
+    const fn new() -> Self {
+        Self {
+            previous_state: AtomicBool::new(false),
+            initialized: AtomicBool::new(false),
+        }
+    }
+
+    /// Get the previous turbo state, if initialized
+    fn get_previous_state(&self) -> Option<bool> {
+        if self.initialized.load(Ordering::Acquire) {
+            Some(self.previous_state.load(Ordering::Acquire))
+        } else {
+            None
+        }
+    }
+
+    /// Initialize the state with a specific value if not already initialized
+    /// Only one thread should be able to initialize the state
+    fn initialize_with(&self, initial_state: bool) -> bool {
+        // First store the initial state so that it's visible before initialized=true
+        self.previous_state.store(initial_state, Ordering::Release);
+
+        // Try to atomically change initialized from false to true
+        // Now, only one thread can win the initialization race
+        match self.initialized.compare_exchange(
+            false,             // expected: not initialized
+            true,              // desired: mark as initialized
+            Ordering::Release, // success: release for memory visibility
+            Ordering::Acquire, // failure: just need to acquire the current value
+        ) {
+            Ok(_) => {
+                // We won the race to initialize
+                initial_state
+            }
+            Err(_) => {
+                // Another thread already initialized it.
+                // Read the current state in bitter defeat
+                self.previous_state.load(Ordering::Acquire)
+            }
+        }
+    }
+
+    /// Update the turbo state for hysteresis
+    fn update_state(&self, new_state: bool) {
+        // First store the new state, then mark as initialized
+        // With this, any thread seeing initialized=true will also see the correct state
+        self.previous_state.store(new_state, Ordering::Release);
+
+        // Already initialized, no need for compare_exchange
+        if self.initialized.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Otherwise, try to set initialized=true (but only if it was false)
+        self.initialized
+            .compare_exchange(
+                false,             // expected: not initialized
+                true,              // desired: mark as initialized
+                Ordering::Release, // success: release for memory visibility
+                Ordering::Relaxed, // failure: we don't care about the current value on failure
+            )
+            .ok(); // Ignore the result. If it fails, it means another thread already initialized it
+    }
+}
 
 /// Try applying a CPU feature and handle common error cases. Centralizes the where we
 /// previously did:
@@ -37,7 +147,7 @@ where
 }
 
 /// Determines the appropriate CPU profile based on power status or forced mode,
-/// and applies the settings using functions from the `cpu` module.
+/// and applies the settings (via helpers defined in the `cpu` module)
 pub fn determine_and_apply_settings(
     report: &SystemReport,
     config: &AppConfig,
@@ -56,6 +166,17 @@ pub fn determine_and_apply_settings(
         })?;
     }
 
+    // Determine AC/Battery status once, early in the function
+    // For desktops (no batteries), we should always use the AC power profile
+    // For laptops, we check if all batteries report connected to AC
+    let on_ac_power = if report.batteries.is_empty() {
+        // No batteries means desktop/server, always on AC
+        true
+    } else {
+        // Check if all batteries report AC connected
+        report.batteries.iter().all(|b| b.ac_connected)
+    };
+
     let selected_profile_config: &ProfileConfig;
 
     if let Some(mode) = force_mode {
@@ -70,17 +191,7 @@ pub fn determine_and_apply_settings(
             }
         }
     } else {
-        // Determine AC/Battery status
-        // For desktops (no batteries), we should always use the AC power profile
-        // For laptops, we check if any battery is present and not connected to AC
-        let on_ac_power = if report.batteries.is_empty() {
-            // No batteries means desktop/server, always on AC
-            true
-        } else {
-            // Check if any battery reports AC connected
-            report.batteries.iter().any(|b| b.ac_connected)
-        };
-
+        // Use the previously computed on_ac_power value
         if on_ac_power {
             info!("On AC power, selecting Charger profile.");
             selected_profile_config = &config.charger;
@@ -112,8 +223,19 @@ pub fn determine_and_apply_settings(
         info!("Setting turbo to '{turbo_setting:?}'");
         match turbo_setting {
             TurboSetting::Auto => {
-                debug!("Managing turbo in auto mode based on system conditions");
-                manage_auto_turbo(report, selected_profile_config)?;
+                if selected_profile_config.enable_auto_turbo {
+                    debug!("Managing turbo in auto mode based on system conditions");
+                    manage_auto_turbo(report, selected_profile_config, on_ac_power)?;
+                } else {
+                    debug!(
+                        "Superfreq's dynamic turbo management is disabled by configuration. Ensuring system uses its default behavior for automatic turbo control."
+                    );
+                    // Make sure the system is set to its default automatic turbo mode.
+                    // This is important if turbo was previously forced off.
+                    try_apply_feature("Turbo boost", "system default (Auto)", || {
+                        cpu::set_turbo(TurboSetting::Auto)
+                    })?;
+                }
             }
             _ => {
                 try_apply_feature("Turbo boost", &format!("{turbo_setting:?}"), || {
@@ -172,12 +294,16 @@ pub fn determine_and_apply_settings(
     Ok(())
 }
 
-fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<(), EngineError> {
-    // Get the auto turbo settings from the config, or use defaults
-    let turbo_settings = config.turbo_auto_settings.clone().unwrap_or_default();
+fn manage_auto_turbo(
+    report: &SystemReport,
+    config: &ProfileConfig,
+    on_ac_power: bool,
+) -> Result<(), EngineError> {
+    // Get the auto turbo settings from the config
+    let turbo_settings = &config.turbo_auto_settings;
 
     // Validate the complete configuration to ensure it's usable
-    validate_turbo_auto_settings(&turbo_settings)?;
+    validate_turbo_auto_settings(turbo_settings)?;
 
     // Get average CPU temperature and CPU load
     let cpu_temp = report.cpu_global.average_temperature_celsius;
@@ -204,39 +330,95 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
     };
 
-    // Decision logic for enabling/disabling turbo
-    let enable_turbo = match (cpu_temp, avg_cpu_usage) {
+    // Get the previous state or initialize with the configured initial state
+    let previous_turbo_enabled = {
+        let turbo_states = get_turbo_states();
+        let hysteresis = turbo_states.get_for_power_state(on_ac_power);
+        if let Some(state) = hysteresis.get_previous_state() {
+            state
+        } else {
+            // Initialize with the configured initial state and return it
+            hysteresis.initialize_with(turbo_settings.initial_turbo_state)
+        }
+    };
+
+    // Decision logic for enabling/disabling turbo with hysteresis
+    let enable_turbo = match (cpu_temp, avg_cpu_usage, previous_turbo_enabled) {
         // If temperature is too high, disable turbo regardless of load
-        (Some(temp), _) if temp >= turbo_settings.temp_threshold_high => {
+        (Some(temp), _, _) if temp >= turbo_settings.temp_threshold_high => {
             info!(
                 "Auto Turbo: Disabled due to high temperature ({:.1}°C >= {:.1}°C)",
                 temp, turbo_settings.temp_threshold_high
             );
             false
         }
+
         // If load is high enough, enable turbo (unless temp already caused it to disable)
-        (_, Some(usage)) if usage >= turbo_settings.load_threshold_high => {
+        (_, Some(usage), _) if usage >= turbo_settings.load_threshold_high => {
             info!(
                 "Auto Turbo: Enabled due to high CPU load ({:.1}% >= {:.1}%)",
                 usage, turbo_settings.load_threshold_high
             );
             true
         }
+
         // If load is low, disable turbo
-        (_, Some(usage)) if usage <= turbo_settings.load_threshold_low => {
+        (_, Some(usage), _) if usage <= turbo_settings.load_threshold_low => {
             info!(
                 "Auto Turbo: Disabled due to low CPU load ({:.1}% <= {:.1}%)",
                 usage, turbo_settings.load_threshold_low
             );
             false
         }
-        // In intermediate load scenarios or if we can't determine, leave turbo in current state
-        // For now, we'll disable it as a safe default
-        _ => {
-            info!("Auto Turbo: Disabled (default for indeterminate state)");
-            false
+
+        // In intermediate load range, maintain previous state (hysteresis)
+        (_, Some(usage), prev_state)
+            if usage > turbo_settings.load_threshold_low
+                && usage < turbo_settings.load_threshold_high =>
+        {
+            info!(
+                "Auto Turbo: Maintaining previous state ({}) due to intermediate load ({:.1}%)",
+                if prev_state { "enabled" } else { "disabled" },
+                usage
+            );
+            prev_state
+        }
+
+        // When CPU load data is present but temperature is missing, use the same hysteresis logic
+        (None, Some(usage), prev_state) => {
+            info!(
+                "Auto Turbo: Maintaining previous state ({}) due to missing temperature data (load: {:.1}%)",
+                if prev_state { "enabled" } else { "disabled" },
+                usage
+            );
+            prev_state
+        }
+
+        // When all metrics are missing, maintain the previous state
+        (None, None, prev_state) => {
+            info!(
+                "Auto Turbo: Maintaining previous state ({}) due to missing all CPU metrics",
+                if prev_state { "enabled" } else { "disabled" }
+            );
+            prev_state
+        }
+
+        // Any other cases with partial metrics, maintain previous state for stability
+        (_, _, prev_state) => {
+            info!(
+                "Auto Turbo: Maintaining previous state ({}) due to incomplete CPU metrics",
+                if prev_state { "enabled" } else { "disabled" }
+            );
+            prev_state
         }
     };
+
+    // Save the current state for next time
+    {
+        let turbo_states = get_turbo_states();
+        let hysteresis = turbo_states.get_for_power_state(on_ac_power);
+        hysteresis.update_state(enable_turbo);
+    }
 
     // Apply the turbo setting
     let turbo_setting = if enable_turbo {
@@ -258,22 +440,21 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
 }
 
 fn validate_turbo_auto_settings(settings: &TurboAutoSettings) -> Result<(), EngineError> {
-    // Validate load thresholds
-    if settings.load_threshold_high <= settings.load_threshold_low {
+    if settings.load_threshold_high <= settings.load_threshold_low
+        || settings.load_threshold_high > 100.0
+        || settings.load_threshold_low < 0.0
+        || settings.load_threshold_low > 100.0
+    {
         return Err(EngineError::ConfigurationError(
-            "Invalid turbo auto settings: high threshold must be greater than low threshold"
+            "Invalid turbo auto settings: load thresholds must be between 0 % and 100 % with high > low"
                 .to_string(),
         ));
     }
 
-    // Validate range of load thresholds (should be 0-100%)
-    if settings.load_threshold_high > 100.0 || settings.load_threshold_low < 0.0 {
-        return Err(EngineError::ConfigurationError(
-            "Invalid turbo auto settings: load thresholds must be between 0% and 100%".to_string(),
-        ));
-    }
-
     // Validate temperature threshold (realistic range for CPU temps in Celsius)
+    // TODO: different CPUs have different temperature thresholds. While 110 is a good example
+    // "extreme" case, the upper barrier might be *lower* for some devices. We'll want to fix
+    // this eventually, or make it configurable.
     if settings.temp_threshold_high <= 0.0 || settings.temp_threshold_high > 110.0 {
         return Err(EngineError::ConfigurationError(
             "Invalid turbo auto settings: temperature threshold must be between 0°C and 110°C"

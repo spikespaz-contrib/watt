@@ -50,7 +50,10 @@ pub struct ProfileConfig {
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
-    pub turbo_auto_settings: Option<TurboAutoSettings>,
+    #[serde(default)]
+    pub turbo_auto_settings: TurboAutoSettings,
+    #[serde(default)]
+    pub enable_auto_turbo: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
 }
@@ -65,7 +68,8 @@ impl Default for ProfileConfig {
             min_freq_mhz: None,     // no override
             max_freq_mhz: None,     // no override
             platform_profile: None, // no override
-            turbo_auto_settings: Some(TurboAutoSettings::default()),
+            turbo_auto_settings: TurboAutoSettings::default(),
+            enable_auto_turbo: default_enable_auto_turbo(),
             battery_charge_thresholds: None,
         }
     }
@@ -124,6 +128,9 @@ pub struct ProfileConfigToml {
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
+    pub turbo_auto_settings: Option<TurboAutoSettings>,
+    #[serde(default = "default_enable_auto_turbo")]
+    pub enable_auto_turbo: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
 }
@@ -151,6 +158,8 @@ impl Default for ProfileConfigToml {
             min_freq_mhz: None,
             max_freq_mhz: None,
             platform_profile: None,
+            turbo_auto_settings: None,
+            enable_auto_turbo: default_enable_auto_turbo(),
             battery_charge_thresholds: None,
         }
     }
@@ -164,12 +173,18 @@ pub struct TurboAutoSettings {
     pub load_threshold_low: f32,
     #[serde(default = "default_temp_threshold_high")]
     pub temp_threshold_high: f32,
+    /// Initial turbo boost state when no previous state exists.
+    /// Set to `true` to start with turbo enabled, `false` to start with turbo disabled.
+    /// This is only used at first launch or after a reset.
+    #[serde(default = "default_initial_turbo_state")]
+    pub initial_turbo_state: bool,
 }
 
 // Default thresholds for Auto turbo mode
 pub const DEFAULT_LOAD_THRESHOLD_HIGH: f32 = 70.0; // enable turbo if load is above this
 pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // disable turbo if load is below this
 pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // disable turbo if temperature is above this
+pub const DEFAULT_INITIAL_TURBO_STATE: bool = false; // by default, start with turbo disabled
 
 const fn default_load_threshold_high() -> f32 {
     DEFAULT_LOAD_THRESHOLD_HIGH
@@ -180,6 +195,9 @@ const fn default_load_threshold_low() -> f32 {
 const fn default_temp_threshold_high() -> f32 {
     DEFAULT_TEMP_THRESHOLD_HIGH
 }
+const fn default_initial_turbo_state() -> bool {
+    DEFAULT_INITIAL_TURBO_STATE
+}
 
 impl Default for TurboAutoSettings {
     fn default() -> Self {
@@ -187,6 +205,7 @@ impl Default for TurboAutoSettings {
             load_threshold_high: DEFAULT_LOAD_THRESHOLD_HIGH,
             load_threshold_low: DEFAULT_LOAD_THRESHOLD_LOW,
             temp_threshold_high: DEFAULT_TEMP_THRESHOLD_HIGH,
+            initial_turbo_state: DEFAULT_INITIAL_TURBO_STATE,
         }
     }
 }
@@ -208,7 +227,8 @@ impl From<ProfileConfigToml> for ProfileConfig {
             min_freq_mhz: toml_config.min_freq_mhz,
             max_freq_mhz: toml_config.max_freq_mhz,
             platform_profile: toml_config.platform_profile,
-            turbo_auto_settings: Some(TurboAutoSettings::default()),
+            turbo_auto_settings: toml_config.turbo_auto_settings.unwrap_or_default(),
+            enable_auto_turbo: toml_config.enable_auto_turbo,
             battery_charge_thresholds: toml_config.battery_charge_thresholds,
         }
     }
@@ -280,6 +300,10 @@ const fn default_log_level() -> LogLevel {
 
 const fn default_stats_file_path() -> Option<String> {
     None
+}
+
+const fn default_enable_auto_turbo() -> bool {
+    true
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
