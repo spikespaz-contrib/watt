@@ -126,8 +126,10 @@ fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
     let blended_interval = if let Some(cached) = system_history.last_computed_interval {
         // Use a weighted average: 70% previous value, 30% new value
         // This smooths out drastic changes in polling frequency
-        // Use integer arithmetic to avoid precision loss with large interval values
-        (cached * 7 + new_interval * 3) / 10
+        // XXX: Use u128 arithmetic to avoid overflow with large interval values
+        let result = (cached as u128 * 7 + new_interval as u128 * 3) / 10;
+
+        result as u64
     } else {
         new_interval
     };
@@ -538,11 +540,18 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
                         );
 
                         // Don't change the interval too dramatically at once
-                        if optimal_interval > current_poll_interval {
-                            current_poll_interval = (current_poll_interval + optimal_interval) / 2;
-                        } else if optimal_interval < current_poll_interval {
-                            current_poll_interval = current_poll_interval
-                                - ((current_poll_interval - optimal_interval) / 2).max(1);
+                        match optimal_interval.cmp(&current_poll_interval) {
+                            std::cmp::Ordering::Greater => {
+                                current_poll_interval =
+                                    (current_poll_interval + optimal_interval) / 2;
+                            }
+                            std::cmp::Ordering::Less => {
+                                current_poll_interval = current_poll_interval
+                                    - ((current_poll_interval - optimal_interval) / 2).max(1);
+                            }
+                            std::cmp::Ordering::Equal => {
+                                // No change needed when they're equal
+                            }
                         }
                     } else {
                         debug!(
