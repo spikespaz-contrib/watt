@@ -62,13 +62,8 @@ fn idle_multiplier(idle_secs: u64) -> f32 {
 ///
 /// Returns Ok with the calculated interval, or Err if the configuration is invalid
 fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> Result<u64, String> {
-    // Validate interval configuration
-    if params.max_interval < params.min_interval {
-        return Err(format!(
-            "Invalid interval configuration: max_interval ({}) is less than min_interval ({})",
-            params.max_interval, params.min_interval
-        ));
-    }
+    // Use the centralized validation function
+    validate_poll_intervals(params.min_interval, params.max_interval)?;
 
     // Start with base interval
     let mut adjusted_interval = params.base_interval;
@@ -176,10 +171,6 @@ struct SystemHistory {
     current_state: SystemState,
     /// Last computed optimal polling interval
     last_computed_interval: Option<u64>,
-    /// Last measured CPU volatility value
-    last_cpu_volatility: f32,
-    /// Last measured idle time in seconds
-    last_idle_secs: u64,
 }
 
 impl Default for SystemHistory {
@@ -195,8 +186,6 @@ impl Default for SystemHistory {
             last_state_change: Instant::now(),
             current_state: SystemState::default(),
             last_computed_interval: None,
-            last_cpu_volatility: 0.0,
-            last_idle_secs: 0,
         }
     }
 }
@@ -388,9 +377,16 @@ impl SystemHistory {
 }
 
 /// Validates that poll interval configuration is consistent
-/// Returns true if configuration is valid, false if invalid
-fn validate_poll_intervals(min_interval: u64, max_interval: u64) -> bool {
-    max_interval >= min_interval
+/// Returns Ok if configuration is valid, Err with a descriptive message if invalid
+fn validate_poll_intervals(min_interval: u64, max_interval: u64) -> Result<(), String> {
+    if max_interval >= min_interval {
+        Ok(())
+    } else {
+        Err(format!(
+            "Invalid interval configuration: max_interval ({}) is less than min_interval ({})",
+            max_interval, min_interval
+        ))
+    }
 }
 
 /// Run the daemon
@@ -416,13 +412,13 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), AppError> {
     info!("Starting superfreq daemon...");
 
     // Validate critical configuration values before proceeding
-    if !validate_poll_intervals(
+    if let Err(err) = validate_poll_intervals(
         config.daemon.min_poll_interval_sec,
         config.daemon.max_poll_interval_sec,
     ) {
         return Err(AppError::Generic(format!(
-            "Invalid configuration: max_poll_interval_sec ({}) is less than min_poll_interval_sec ({}). Please fix your configuration.",
-            config.daemon.max_poll_interval_sec, config.daemon.min_poll_interval_sec
+            "Invalid configuration: {}. Please fix your configuration.",
+            err
         )));
     }
 
@@ -499,15 +495,10 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), AppError> {
 
                 // Calculate optimal polling interval if adaptive polling is enabled
                 if config.daemon.adaptive_interval {
-                    let current_cpu_volatility = system_history.get_cpu_volatility();
-                    let current_idle_secs = system_history.last_user_activity.elapsed().as_secs();
-
                     match system_history.calculate_optimal_interval(&config, on_battery) {
                         Ok(optimal_interval) => {
-                            // Store the new interval and update cached metrics
+                            // Store the new interval
                             system_history.last_computed_interval = Some(optimal_interval);
-                            system_history.last_cpu_volatility = current_cpu_volatility;
-                            system_history.last_idle_secs = current_idle_secs;
 
                             debug!("Recalculated optimal interval: {optimal_interval}s");
 
