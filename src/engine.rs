@@ -369,15 +369,25 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
         // In indeterminate states or unknown previous state, use the configured initial state
         _ => {
-            info!(
-                "Auto Turbo: Using configured initial state ({})",
-                if turbo_settings.initial_turbo_state {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            );
-            turbo_settings.initial_turbo_state
+            // If we have a previous state, maintain it for hysteresis even if load data is missing
+            if let Some(prev_state) = previous_turbo_enabled {
+                info!(
+                    "Auto Turbo: Maintaining previous state ({}) due to missing CPU data",
+                    if prev_state { "enabled" } else { "disabled" }
+                );
+                prev_state
+            } else {
+                // No previous state exists, fall back to configured initial state
+                info!(
+                    "Auto Turbo: Using configured initial state ({})",
+                    if turbo_settings.initial_turbo_state {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+                turbo_settings.initial_turbo_state
+            }
         }
     };
 
