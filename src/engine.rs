@@ -300,10 +300,10 @@ fn manage_auto_turbo(
     on_ac_power: bool,
 ) -> Result<(), EngineError> {
     // Get the auto turbo settings from the config
-    let turbo_settings = config.turbo_auto_settings.clone();
+    let turbo_settings = &config.turbo_auto_settings;
 
     // Validate the complete configuration to ensure it's usable
-    validate_turbo_auto_settings(&turbo_settings)?;
+    validate_turbo_auto_settings(turbo_settings)?;
 
     // Get average CPU temperature and CPU load
     let cpu_temp = report.cpu_global.average_temperature_celsius;
@@ -440,22 +440,14 @@ fn manage_auto_turbo(
 }
 
 fn validate_turbo_auto_settings(settings: &TurboAutoSettings) -> Result<(), EngineError> {
-    // Validate load thresholds (0-100 % and high > low)
     if settings.load_threshold_high <= settings.load_threshold_low
         || settings.load_threshold_high > 100.0
         || settings.load_threshold_low < 0.0
         || settings.load_threshold_low > 100.0
     {
         return Err(EngineError::ConfigurationError(
-            "Invalid turbo auto settings: load thresholds must be in 0-100% and high > low"
+            "Invalid turbo auto settings: load thresholds must be between 0 % and 100 % with high > low"
                 .to_string(),
-        ));
-    }
-
-    // Validate range of load thresholds (should be 0-100%)
-    if settings.load_threshold_high > 100.0 || settings.load_threshold_low < 0.0 {
-        return Err(EngineError::ConfigurationError(
-            "Invalid turbo auto settings: load thresholds must be between 0% and 100%".to_string(),
         ));
     }
 
