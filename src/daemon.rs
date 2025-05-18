@@ -118,22 +118,23 @@ fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
     }
 
     // Ensure interval stays within configured bounds
-    let new_interval = adjusted_interval.clamp(params.min_interval, params.max_interval);
+    // Enforce a minimum of 1 second to prevent busy loops, regardless of params.min_interval
+    let min_safe_interval = params.min_interval.max(1);
+    let new_interval = adjusted_interval.clamp(min_safe_interval, params.max_interval);
 
     // Blend the new interval with the cached value if available
     let blended_interval = if let Some(cached) = system_history.last_computed_interval {
         // Use a weighted average: 70% previous value, 30% new value
         // This smooths out drastic changes in polling frequency
-        // We use integer arithmetic to avoid precision loss with large interval values
-        // I think Clippy warned me about this at some point and I ignored it. Now I come
-        // crawling back to it...
+        // Use integer arithmetic to avoid precision loss with large interval values
         (cached * 7 + new_interval * 3) / 10
     } else {
         new_interval
     };
 
     // Blended result still needs to respect the configured bounds
-    blended_interval.clamp(params.min_interval, params.max_interval)
+    // Again enforce minimum of 1 second regardless of params.min_interval
+    blended_interval.clamp(min_safe_interval, params.max_interval)
 }
 
 /// Tracks historical system data for "advanced" adaptive polling
