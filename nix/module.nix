@@ -31,6 +31,10 @@ in {
   config = mkIf cfg.enable {
     environment.systemPackages = [cfg.package];
 
+    # This is necessary for the Superfreq CLI. The environment variable
+    # passed to the systemd service will take priority in read order.
+    environment.etc."superfreq.toml".source = cfgFile;
+
     systemd.services.superfreq = {
       wantedBy = ["multi-user.target"];
       conflicts = [
