@@ -23,17 +23,17 @@ pub struct BatteryChargeThresholds {
 impl BatteryChargeThresholds {
     pub fn new(start: u8, stop: u8) -> Result<Self, ConfigError> {
         if stop == 0 {
-            return Err(ConfigError::ValidationError(
+            return Err(ConfigError::Validation(
                 "Stop threshold must be greater than 0%".to_string(),
             ));
         }
         if start >= stop {
-            return Err(ConfigError::ValidationError(format!(
+            return Err(ConfigError::Validation(format!(
                 "Start threshold ({start}) must be less than stop threshold ({stop})"
             )));
         }
         if stop > 100 {
-            return Err(ConfigError::ValidationError(format!(
+            return Err(ConfigError::Validation(format!(
                 "Stop threshold ({stop}) cannot exceed 100%"
             )));
         }
@@ -100,29 +100,29 @@ pub struct AppConfig {
 // Error type for config loading
 #[derive(Debug)]
 pub enum ConfigError {
-    IoError(std::io::Error),
-    TomlError(toml::de::Error),
-    ValidationError(String),
+    Io(std::io::Error),
+    Toml(toml::de::Error),
+    Validation(String),
 }
 
 impl From<std::io::Error> for ConfigError {
     fn from(err: std::io::Error) -> Self {
-        Self::IoError(err)
+        Self::Io(err)
     }
 }
 
 impl From<toml::de::Error> for ConfigError {
     fn from(err: toml::de::Error) -> Self {
-        Self::TomlError(err)
+        Self::Toml(err)
     }
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IoError(e) => write!(f, "I/O error: {e}"),
-            Self::TomlError(e) => write!(f, "TOML parsing error: {e}"),
-            Self::ValidationError(s) => write!(f, "Configuration validation error: {s}"),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Toml(e) => write!(f, "TOML parsing error: {e}"),
+            Self::Validation(s) => write!(f, "Configuration validation error: {s}"),
         }
     }
 }

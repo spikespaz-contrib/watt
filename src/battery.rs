@@ -74,7 +74,7 @@ pub fn set_battery_charge_thresholds(start_threshold: u8, stop_threshold: u8) ->
     // Validate thresholds using `BatteryChargeThresholds`
     let thresholds =
         BatteryChargeThresholds::new(start_threshold, stop_threshold).map_err(|e| match e {
-            crate::config::types::ConfigError::ValidationError(msg) => {
+            crate::config::types::ConfigError::Validation(msg) => {
                 ControlError::InvalidValueError(msg)
             }
             _ => ControlError::InvalidValueError(format!("Invalid battery threshold values: {e}")),
