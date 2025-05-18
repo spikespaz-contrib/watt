@@ -461,6 +461,7 @@ fn manage_auto_turbo(
 fn validate_turbo_auto_settings(settings: &TurboAutoSettings) -> Result<(), EngineError> {
     if settings.load_threshold_high <= settings.load_threshold_low
         || settings.load_threshold_high > 100.0
+        || settings.load_threshold_high < 0.0
         || settings.load_threshold_low < 0.0
         || settings.load_threshold_low > 100.0
     {
