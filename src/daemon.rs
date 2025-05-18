@@ -522,8 +522,7 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
                     // or if we haven't computed an interval yet
                     if system_history.last_computed_interval.is_none()
                         || (system_history.last_cpu_volatility - current_cpu_volatility).abs() > 1.0
-                        || (system_history.last_idle_secs as i64 - current_idle_secs as i64).abs()
-                            > 10
+                        || u64::abs_diff(system_history.last_idle_secs, current_idle_secs) > 10
                     {
                         let optimal_interval =
                             system_history.calculate_optimal_interval(&config, on_battery);
