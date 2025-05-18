@@ -206,7 +206,15 @@ pub fn determine_and_apply_settings(
             TurboSetting::Auto => {
                 if selected_profile_config.enable_auto_turbo {
                     debug!("Managing turbo in auto mode based on system conditions");
-                    manage_auto_turbo(report, selected_profile_config)?;
+                    // Determine AC status and pass it to manage_auto_turbo
+                    let on_ac_power = if report.batteries.is_empty() {
+                        // No batteries means desktop/server, always on AC
+                        true
+                    } else {
+                        // Check if any battery reports AC connected
+                        report.batteries.iter().any(|b| b.ac_connected)
+                    };
+                    manage_auto_turbo(report, selected_profile_config, on_ac_power)?;
                 } else {
                     debug!(
                         "Superfreq's dynamic turbo management is disabled by configuration. Ensuring system uses its default behavior for automatic turbo control."
@@ -275,7 +283,11 @@ pub fn determine_and_apply_settings(
     Ok(())
 }
 
-fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<(), EngineError> {
+fn manage_auto_turbo(
+    report: &SystemReport,
+    config: &ProfileConfig,
+    on_ac_power: bool,
+) -> Result<(), EngineError> {
     // Get the auto turbo settings from the config, or use defaults
     let turbo_settings = config.turbo_auto_settings.clone().unwrap_or_default();
 
@@ -307,20 +319,10 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
         }
     };
 
-    // Use the appropriate hysteresis object based on whether we're on battery or AC power
-    // For systems without batteries (desktops), we should always use the AC power hysteresis
-    let is_on_ac = if report.batteries.is_empty() {
-        // No batteries means desktop/server, always on AC
-        true
-    } else {
-        // Check if any battery reports AC connected
-        report.batteries.iter().any(|b| b.ac_connected)
-    };
-
     // Get the previous state or initialize with the configured initial state
     let previous_turbo_enabled = {
         let turbo_states = get_turbo_states().lock().unwrap();
-        let hysteresis = turbo_states.get_for_power_state(is_on_ac);
+        let hysteresis = turbo_states.get_for_power_state(on_ac_power);
         if let Some(state) = hysteresis.get_previous_state() {
             Some(state)
         } else {
@@ -394,7 +396,7 @@ fn manage_auto_turbo(report: &SystemReport, config: &ProfileConfig) -> Result<()
     // Save the current state for next time
     {
         let turbo_states = get_turbo_states().lock().unwrap();
-        let hysteresis = turbo_states.get_for_power_state(is_on_ac);
+        let hysteresis = turbo_states.get_for_power_state(on_ac_power);
         hysteresis.update_state(enable_turbo);
     }
 
