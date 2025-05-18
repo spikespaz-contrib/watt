@@ -207,7 +207,7 @@ pub fn determine_and_apply_settings(
         // Let set_governor handle the validation
         if let Err(e) = cpu::set_governor(governor, None) {
             // If the governor is not available, log a warning
-            if matches!(e, ControlError::InvalidValueError(_))
+            if matches!(e, ControlError::InvalidGovernor(_))
                 || matches!(e, ControlError::NotSupported(_))
             {
                 warn!(

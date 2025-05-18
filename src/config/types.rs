@@ -98,36 +98,17 @@ pub struct AppConfig {
 }
 
 // Error type for config loading
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    Io(std::io::Error),
-    Toml(toml::de::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("TOML parsing error: {0}")]
+    Toml(#[from] toml::de::Error),
+
+    #[error("Configuration validation error: {0}")]
     Validation(String),
 }
-
-impl From<std::io::Error> for ConfigError {
-    fn from(err: std::io::Error) -> Self {
-        Self::Io(err)
-    }
-}
-
-impl From<toml::de::Error> for ConfigError {
-    fn from(err: toml::de::Error) -> Self {
-        Self::Toml(err)
-    }
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::Toml(e) => write!(f, "TOML parsing error: {e}"),
-            Self::Validation(s) => write!(f, "Configuration validation error: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 // Intermediate structs for TOML parsing
 #[derive(Deserialize, Serialize, Debug, Clone)]

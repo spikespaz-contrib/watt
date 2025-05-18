@@ -61,7 +61,10 @@ fn idle_multiplier(idle_secs: u64) -> f32 {
 /// Calculate optimal polling interval based on system conditions and history
 ///
 /// Returns Ok with the calculated interval, or Err if the configuration is invalid
-fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> Result<u64, ControlError> {
+fn compute_new(
+    params: &IntervalParams,
+    system_history: &SystemHistory,
+) -> Result<u64, ControlError> {
     // Use the centralized validation function
     validate_poll_intervals(params.min_interval, params.max_interval)?;
 
@@ -134,8 +137,8 @@ fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> Resul
         const TOTAL_WEIGHT: u128 = PREVIOUS_VALUE_WEIGHT + NEW_VALUE_WEIGHT; // 10
 
         // XXX: Use u128 arithmetic to avoid overflow with large interval values
-        let result = (cached as u128 * PREVIOUS_VALUE_WEIGHT
-            + new_interval as u128 * NEW_VALUE_WEIGHT)
+        let result = (u128::from(cached) * PREVIOUS_VALUE_WEIGHT
+            + u128::from(new_interval) * NEW_VALUE_WEIGHT)
             / TOTAL_WEIGHT;
 
         result as u64
@@ -381,20 +384,19 @@ impl SystemHistory {
 fn validate_poll_intervals(min_interval: u64, max_interval: u64) -> Result<(), ControlError> {
     if min_interval < 1 {
         return Err(ControlError::InvalidValueError(
-            "min_interval must be ≥ 1".to_string()
+            "min_interval must be ≥ 1".to_string(),
         ));
     }
     if max_interval < 1 {
         return Err(ControlError::InvalidValueError(
-            "max_interval must be ≥ 1".to_string()
+            "max_interval must be ≥ 1".to_string(),
         ));
     }
     if max_interval >= min_interval {
         Ok(())
     } else {
         Err(ControlError::InvalidValueError(format!(
-            "Invalid interval configuration: max_interval ({}) is less than min_interval ({})",
-            max_interval, min_interval
+            "Invalid interval configuration: max_interval ({max_interval}) is less than min_interval ({min_interval})"
         )))
     }
 }
