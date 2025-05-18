@@ -69,6 +69,10 @@ jobs:
         if: ${{ matrix.cross }}
         run: cross build --release --target ${{ matrix.target }}
 
+      - name: Prepare binary
+        run: |
+          cp target/${{ matrix.target }}/release/tempus ${{ matrix.name }}
+
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
