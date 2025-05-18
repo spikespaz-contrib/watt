@@ -133,10 +133,7 @@ fn main() -> Result<(), AppError> {
                 );
 
                 // Format timestamp in a readable way
-                println!(
-                    "Current Time:       {}",
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-                );
+                println!("Current Time:       {}", jiff::Timestamp::now());
 
                 format_section("CPU Global Info");
                 println!(
