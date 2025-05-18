@@ -50,7 +50,9 @@ pub struct ProfileConfig {
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
+    #[serde(default)]
     pub turbo_auto_settings: TurboAutoSettings,
+    #[serde(default)]
     pub enable_auto_turbo: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
