@@ -150,6 +150,17 @@ pub fn determine_and_apply_settings(
         })?;
     }
 
+    // Determine AC/Battery status once, early in the function
+    // For desktops (no batteries), we should always use the AC power profile
+    // For laptops, we check if any battery is present and not connected to AC
+    let on_ac_power = if report.batteries.is_empty() {
+        // No batteries means desktop/server, always on AC
+        true
+    } else {
+        // Check if any battery reports AC connected
+        report.batteries.iter().any(|b| b.ac_connected)
+    };
+
     let selected_profile_config: &ProfileConfig;
 
     if let Some(mode) = force_mode {
@@ -164,17 +175,7 @@ pub fn determine_and_apply_settings(
             }
         }
     } else {
-        // Determine AC/Battery status
-        // For desktops (no batteries), we should always use the AC power profile
-        // For laptops, we check if any battery is present and not connected to AC
-        let on_ac_power = if report.batteries.is_empty() {
-            // No batteries means desktop/server, always on AC
-            true
-        } else {
-            // Check if any battery reports AC connected
-            report.batteries.iter().any(|b| b.ac_connected)
-        };
-
+        // Use the previously computed on_ac_power value
         if on_ac_power {
             info!("On AC power, selecting Charger profile.");
             selected_profile_config = &config.charger;
@@ -201,15 +202,6 @@ pub fn determine_and_apply_settings(
             }
         }
     }
-
-    // Determine AC/Battery status once for the entire function
-    let on_ac_power = if report.batteries.is_empty() {
-        // No batteries means desktop/server, always on AC
-        true
-    } else {
-        // Check if any battery reports AC connected
-        report.batteries.iter().any(|b| b.ac_connected)
-    };
 
     if let Some(turbo_setting) = selected_profile_config.turbo {
         info!("Setting turbo to '{turbo_setting:?}'");
@@ -327,10 +319,10 @@ fn manage_auto_turbo(
         let turbo_states = get_turbo_states();
         let hysteresis = turbo_states.get_for_power_state(on_ac_power);
         if let Some(state) = hysteresis.get_previous_state() {
-            Some(state)
+            state
         } else {
             // Initialize with the configured initial state and return it
-            Some(hysteresis.initialize_with(turbo_settings.initial_turbo_state))
+            hysteresis.initialize_with(turbo_settings.initial_turbo_state)
         }
     };
 
@@ -361,7 +353,7 @@ fn manage_auto_turbo(
             false
         }
         // In intermediate load range, maintain previous state (hysteresis)
-        (_, Some(usage), Some(prev_state))
+        (_, Some(usage), prev_state)
             if usage > turbo_settings.load_threshold_low
                 && usage < turbo_settings.load_threshold_high =>
         {
@@ -372,27 +364,30 @@ fn manage_auto_turbo(
             );
             prev_state
         }
-        // In indeterminate states or unknown previous state, use the configured initial state
-        _ => {
-            // If we have a previous state, maintain it for hysteresis even if load data is missing
-            if let Some(prev_state) = previous_turbo_enabled {
-                info!(
-                    "Auto Turbo: Maintaining previous state ({}) due to missing CPU data",
-                    if prev_state { "enabled" } else { "disabled" }
-                );
-                prev_state
-            } else {
-                // No previous state exists, fall back to configured initial state
-                info!(
-                    "Auto Turbo: Using configured initial state ({})",
-                    if turbo_settings.initial_turbo_state {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                );
-                turbo_settings.initial_turbo_state
-            }
+        // When CPU load data is present but temperature is missing, use the same hysteresis logic
+        (None, Some(usage), prev_state) => {
+            info!(
+                "Auto Turbo: Maintaining previous state ({}) due to missing temperature data (load: {:.1}%)",
+                if prev_state { "enabled" } else { "disabled" },
+                usage
+            );
+            prev_state
+        }
+        // When all metrics are missing, maintain the previous state
+        (None, None, prev_state) => {
+            info!(
+                "Auto Turbo: Maintaining previous state ({}) due to missing all CPU metrics",
+                if prev_state { "enabled" } else { "disabled" }
+            );
+            prev_state
+        }
+        // Any other cases with partial metrics, maintain previous state for stability
+        (_, _, prev_state) => {
+            info!(
+                "Auto Turbo: Maintaining previous state ({}) due to incomplete CPU metrics",
+                if prev_state { "enabled" } else { "disabled" }
+            );
+            prev_state
         }
     };
 
