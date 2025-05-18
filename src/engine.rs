@@ -81,6 +81,7 @@ impl TurboHysteresis {
         ) {
             Ok(_) => {
                 // We won the race to initialize - set the initial state
+                // Store the initial_state first, before marking as initialized
                 self.previous_state.store(initial_state, Ordering::Release);
                 initial_state
             }
