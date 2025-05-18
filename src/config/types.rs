@@ -50,7 +50,7 @@ pub struct ProfileConfig {
     pub min_freq_mhz: Option<u32>,
     pub max_freq_mhz: Option<u32>,
     pub platform_profile: Option<String>,
-    pub turbo_auto_settings: Option<TurboAutoSettings>,
+    pub turbo_auto_settings: TurboAutoSettings,
     pub enable_auto_turbo: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery_charge_thresholds: Option<BatteryChargeThresholds>,
@@ -66,7 +66,7 @@ impl Default for ProfileConfig {
             min_freq_mhz: None,     // no override
             max_freq_mhz: None,     // no override
             platform_profile: None, // no override
-            turbo_auto_settings: Some(TurboAutoSettings::default()),
+            turbo_auto_settings: TurboAutoSettings::default(),
             enable_auto_turbo: default_enable_auto_turbo(),
             battery_charge_thresholds: None,
         }
@@ -224,7 +224,7 @@ impl From<ProfileConfigToml> for ProfileConfig {
             platform_profile: toml_config.platform_profile,
             turbo_auto_settings: toml_config
                 .turbo_auto_settings
-                .or_else(|| Some(TurboAutoSettings::default())),
+                .unwrap_or_default(),
             enable_auto_turbo: toml_config.enable_auto_turbo,
             battery_charge_thresholds: toml_config.battery_charge_thresholds,
         }

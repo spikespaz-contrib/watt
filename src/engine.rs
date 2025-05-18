@@ -290,8 +290,8 @@ fn manage_auto_turbo(
     config: &ProfileConfig,
     on_ac_power: bool,
 ) -> Result<(), EngineError> {
-    // Get the auto turbo settings from the config, or use defaults
-    let turbo_settings = config.turbo_auto_settings.clone().unwrap_or_default();
+    // Get the auto turbo settings from the config
+    let turbo_settings = config.turbo_auto_settings.clone();
 
     // Validate the complete configuration to ensure it's usable
     validate_turbo_auto_settings(&turbo_settings)?;
