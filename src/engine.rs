@@ -69,11 +69,8 @@ impl TurboHysteresis {
     /// Initialize the state with a specific value if not already initialized
     /// Only one thread should be able to initialize the state
     fn initialize_with(&self, initial_state: bool) -> bool {
-        // First store the initial state so that it's visible before initialized=true
-        self.previous_state.store(initial_state, Ordering::Release);
-
-        // Try to atomically change initialized from false to true
-        // Now, only one thread can win the initialization race
+        // First, try to atomically change initialized from false to true
+        // Only one thread can win the initialization race
         match self.initialized.compare_exchange(
             false,             // expected: not initialized
             true,              // desired: mark as initialized
@@ -82,11 +79,14 @@ impl TurboHysteresis {
         ) {
             Ok(_) => {
                 // We won the race to initialize
+                // Now it's safe to set the initial state since we know we're the only
+                // thread that has successfully marked this as initialized
+                self.previous_state.store(initial_state, Ordering::Release);
                 initial_state
             }
             Err(_) => {
                 // Another thread already initialized it.
-                // Read the current state in bitter defeat
+                // Just read the current state value that was set by the winning thread
                 self.previous_state.load(Ordering::Acquire)
             }
         }

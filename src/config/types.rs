@@ -3,6 +3,17 @@ use crate::core::TurboSetting;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
+/// Defines constant-returning functions used for default values.
+/// This hopefully reduces repetition since we have way too many default functions
+/// that just return constants.
+macro_rules! default_const {
+    ($name:ident, $type:ty, $value:expr) => {
+        const fn $name() -> $type {
+            $value
+        }
+    };
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct BatteryChargeThresholds {
     pub start: u8,
@@ -186,18 +197,22 @@ pub const DEFAULT_LOAD_THRESHOLD_LOW: f32 = 30.0; // disable turbo if load is be
 pub const DEFAULT_TEMP_THRESHOLD_HIGH: f32 = 75.0; // disable turbo if temperature is above this
 pub const DEFAULT_INITIAL_TURBO_STATE: bool = false; // by default, start with turbo disabled
 
-const fn default_load_threshold_high() -> f32 {
+default_const!(
+    default_load_threshold_high,
+    f32,
     DEFAULT_LOAD_THRESHOLD_HIGH
-}
-const fn default_load_threshold_low() -> f32 {
-    DEFAULT_LOAD_THRESHOLD_LOW
-}
-const fn default_temp_threshold_high() -> f32 {
+);
+default_const!(default_load_threshold_low, f32, DEFAULT_LOAD_THRESHOLD_LOW);
+default_const!(
+    default_temp_threshold_high,
+    f32,
     DEFAULT_TEMP_THRESHOLD_HIGH
-}
-const fn default_initial_turbo_state() -> bool {
+);
+default_const!(
+    default_initial_turbo_state,
+    bool,
     DEFAULT_INITIAL_TURBO_STATE
-}
+);
 
 impl Default for TurboAutoSettings {
     fn default() -> Self {
@@ -274,37 +289,14 @@ impl Default for DaemonConfig {
     }
 }
 
-const fn default_poll_interval_sec() -> u64 {
-    5
-}
-
-const fn default_adaptive_interval() -> bool {
-    false
-}
-
-const fn default_min_poll_interval_sec() -> u64 {
-    1
-}
-
-const fn default_max_poll_interval_sec() -> u64 {
-    30
-}
-
-const fn default_throttle_on_battery() -> bool {
-    true
-}
-
-const fn default_log_level() -> LogLevel {
-    LogLevel::Info
-}
-
-const fn default_stats_file_path() -> Option<String> {
-    None
-}
-
-const fn default_enable_auto_turbo() -> bool {
-    true
-}
+default_const!(default_poll_interval_sec, u64, 5);
+default_const!(default_adaptive_interval, bool, false);
+default_const!(default_min_poll_interval_sec, u64, 1);
+default_const!(default_max_poll_interval_sec, u64, 30);
+default_const!(default_throttle_on_battery, bool, true);
+default_const!(default_log_level, LogLevel, LogLevel::Info);
+default_const!(default_stats_file_path, Option<String>, None);
+default_const!(default_enable_auto_turbo, bool, true);
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DaemonConfigToml {
