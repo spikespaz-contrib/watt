@@ -2,7 +2,7 @@ use crate::config::{AppConfig, LogLevel};
 use crate::core::SystemReport;
 use crate::engine;
 use crate::monitor;
-use crate::util::error::AppError;
+use crate::util::error::{AppError, ControlError};
 use log::{LevelFilter, debug, error, info, warn};
 use std::collections::VecDeque;
 use std::fs::File;
@@ -61,7 +61,7 @@ fn idle_multiplier(idle_secs: u64) -> f32 {
 /// Calculate optimal polling interval based on system conditions and history
 ///
 /// Returns Ok with the calculated interval, or Err if the configuration is invalid
-fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> Result<u64, String> {
+fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> Result<u64, ControlError> {
     // Use the centralized validation function
     validate_poll_intervals(params.min_interval, params.max_interval)?;
 
@@ -359,7 +359,7 @@ impl SystemHistory {
         &self,
         config: &AppConfig,
         on_battery: bool,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, ControlError> {
         let params = IntervalParams {
             base_interval: config.daemon.poll_interval_sec,
             min_interval: config.daemon.min_poll_interval_sec,
@@ -378,14 +378,24 @@ impl SystemHistory {
 
 /// Validates that poll interval configuration is consistent
 /// Returns Ok if configuration is valid, Err with a descriptive message if invalid
-fn validate_poll_intervals(min_interval: u64, max_interval: u64) -> Result<(), String> {
+fn validate_poll_intervals(min_interval: u64, max_interval: u64) -> Result<(), ControlError> {
+    if min_interval < 1 {
+        return Err(ControlError::InvalidValueError(
+            "min_interval must be ≥ 1".to_string()
+        ));
+    }
+    if max_interval < 1 {
+        return Err(ControlError::InvalidValueError(
+            "max_interval must be ≥ 1".to_string()
+        ));
+    }
     if max_interval >= min_interval {
         Ok(())
     } else {
-        Err(format!(
+        Err(ControlError::InvalidValueError(format!(
             "Invalid interval configuration: max_interval ({}) is less than min_interval ({})",
             max_interval, min_interval
-        ))
+        )))
     }
 }
 
@@ -416,10 +426,7 @@ pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), AppError> {
         config.daemon.min_poll_interval_sec,
         config.daemon.max_poll_interval_sec,
     ) {
-        return Err(AppError::Generic(format!(
-            "Invalid configuration: {}. Please fix your configuration.",
-            err
-        )));
+        return Err(AppError::Control(err));
     }
 
     // Create a flag that will be set to true when a signal is received
