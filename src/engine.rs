@@ -420,22 +420,41 @@ fn manage_auto_turbo(
         hysteresis.update_state(enable_turbo);
     }
 
-    // Apply the turbo setting
-    let turbo_setting = if enable_turbo {
-        TurboSetting::Always
-    } else {
-        TurboSetting::Never
-    };
+    // Only apply the setting if the state has changed
+    let changed = previous_turbo_enabled != enable_turbo;
+    if changed {
+        let turbo_setting = if enable_turbo {
+            TurboSetting::Always
+        } else {
+            TurboSetting::Never
+        };
 
-    match cpu::set_turbo(turbo_setting) {
-        Ok(()) => {
-            debug!(
-                "Auto Turbo: Successfully set turbo to {}",
-                if enable_turbo { "enabled" } else { "disabled" }
-            );
-            Ok(())
+        info!(
+            "Auto Turbo: Applying turbo change from {} to {}",
+            if previous_turbo_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            if enable_turbo { "enabled" } else { "disabled" }
+        );
+
+        match cpu::set_turbo(turbo_setting) {
+            Ok(()) => {
+                debug!(
+                    "Auto Turbo: Successfully set turbo to {}",
+                    if enable_turbo { "enabled" } else { "disabled" }
+                );
+                Ok(())
+            }
+            Err(e) => Err(EngineError::ControlError(e)),
         }
-        Err(e) => Err(EngineError::ControlError(e)),
+    } else {
+        debug!(
+            "Auto Turbo: Maintaining turbo state ({}) - no change needed",
+            if enable_turbo { "enabled" } else { "disabled" }
+        );
+        Ok(())
     }
 }
 
