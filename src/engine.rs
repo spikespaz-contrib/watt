@@ -94,7 +94,7 @@ impl TurboHysteresis {
 
     /// Update the turbo state for hysteresis
     fn update_state(&self, new_state: bool) {
-q        // First store the new state, then mark as initialized
+        // First store the new state, then mark as initialized
         // With this, any thread seeing initialized=true will also see the correct state
         self.previous_state.store(new_state, Ordering::Release);
 

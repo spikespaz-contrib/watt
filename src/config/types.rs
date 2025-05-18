@@ -171,6 +171,9 @@ pub struct TurboAutoSettings {
     pub load_threshold_low: f32,
     #[serde(default = "default_temp_threshold_high")]
     pub temp_threshold_high: f32,
+    /// Initial turbo boost state when no previous state exists.
+    /// Set to `true` to start with turbo enabled, `false` to start with turbo disabled.
+    /// This is only used at first launch or after a reset.
     #[serde(default = "default_initial_turbo_state")]
     pub initial_turbo_state: bool,
 }
