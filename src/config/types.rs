@@ -222,9 +222,7 @@ impl From<ProfileConfigToml> for ProfileConfig {
             min_freq_mhz: toml_config.min_freq_mhz,
             max_freq_mhz: toml_config.max_freq_mhz,
             platform_profile: toml_config.platform_profile,
-            turbo_auto_settings: toml_config
-                .turbo_auto_settings
-                .unwrap_or_default(),
+            turbo_auto_settings: toml_config.turbo_auto_settings.unwrap_or_default(),
             enable_auto_turbo: toml_config.enable_auto_turbo,
             battery_charge_thresholds: toml_config.battery_charge_thresholds,
         }

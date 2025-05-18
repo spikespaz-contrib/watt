@@ -202,20 +202,21 @@ pub fn determine_and_apply_settings(
         }
     }
 
+    // Determine AC/Battery status once for the entire function
+    let on_ac_power = if report.batteries.is_empty() {
+        // No batteries means desktop/server, always on AC
+        true
+    } else {
+        // Check if any battery reports AC connected
+        report.batteries.iter().any(|b| b.ac_connected)
+    };
+
     if let Some(turbo_setting) = selected_profile_config.turbo {
         info!("Setting turbo to '{turbo_setting:?}'");
         match turbo_setting {
             TurboSetting::Auto => {
                 if selected_profile_config.enable_auto_turbo {
                     debug!("Managing turbo in auto mode based on system conditions");
-                    // Determine AC status and pass it to manage_auto_turbo
-                    let on_ac_power = if report.batteries.is_empty() {
-                        // No batteries means desktop/server, always on AC
-                        true
-                    } else {
-                        // Check if any battery reports AC connected
-                        report.batteries.iter().any(|b| b.ac_connected)
-                    };
                     manage_auto_turbo(report, selected_profile_config, on_ac_power)?;
                 } else {
                     debug!(
