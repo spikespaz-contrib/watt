@@ -126,8 +126,14 @@ fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
     let blended_interval = if let Some(cached) = system_history.last_computed_interval {
         // Use a weighted average: 70% previous value, 30% new value
         // This smooths out drastic changes in polling frequency
+        const PREVIOUS_VALUE_WEIGHT: u128 = 7; // 70%
+        const NEW_VALUE_WEIGHT: u128 = 3; // 30%
+        const TOTAL_WEIGHT: u128 = PREVIOUS_VALUE_WEIGHT + NEW_VALUE_WEIGHT; // 10
+
         // XXX: Use u128 arithmetic to avoid overflow with large interval values
-        let result = (cached as u128 * 7 + new_interval as u128 * 3) / 10;
+        let result = (cached as u128 * PREVIOUS_VALUE_WEIGHT
+            + new_interval as u128 * NEW_VALUE_WEIGHT)
+            / TOTAL_WEIGHT;
 
         result as u64
     } else {
