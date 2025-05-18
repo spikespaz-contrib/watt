@@ -4,8 +4,8 @@ use crate::core::{OperationalMode, SystemReport, TurboSetting};
 use crate::cpu::{self};
 use crate::util::error::{ControlError, EngineError};
 use log::{debug, info, warn};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 /// A struct to track turbo boost state for AC and battery power modes
 struct TurboHysteresisStates {
@@ -32,12 +32,13 @@ impl TurboHysteresisStates {
     }
 }
 
-/// Create a global instance of `TurboHysteresisStates` protected by a mutex
-static TURBO_STATES: OnceLock<Mutex<TurboHysteresisStates>> = OnceLock::new();
+/// Create a global instance of `TurboHysteresisStates` without a mutex
+/// since `AtomicBool` already provides thread safety
+static TURBO_STATES: OnceLock<TurboHysteresisStates> = OnceLock::new();
 
 /// Get or initialize the global turbo states
-fn get_turbo_states() -> &'static Mutex<TurboHysteresisStates> {
-    TURBO_STATES.get_or_init(|| Mutex::new(TurboHysteresisStates::new()))
+fn get_turbo_states() -> &'static TurboHysteresisStates {
+    TURBO_STATES.get_or_init(TurboHysteresisStates::new)
 }
 
 /// Manage turbo boost hysteresis state.
@@ -321,7 +322,7 @@ fn manage_auto_turbo(
 
     // Get the previous state or initialize with the configured initial state
     let previous_turbo_enabled = {
-        let turbo_states = get_turbo_states().lock().unwrap();
+        let turbo_states = get_turbo_states();
         let hysteresis = turbo_states.get_for_power_state(on_ac_power);
         if let Some(state) = hysteresis.get_previous_state() {
             Some(state)
@@ -395,7 +396,7 @@ fn manage_auto_turbo(
 
     // Save the current state for next time
     {
-        let turbo_states = get_turbo_states().lock().unwrap();
+        let turbo_states = get_turbo_states();
         let hysteresis = turbo_states.get_for_power_state(on_ac_power);
         hysteresis.update_state(enable_turbo);
     }
