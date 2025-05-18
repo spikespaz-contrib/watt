@@ -60,7 +60,7 @@ fn idle_multiplier(idle_secs: u64) -> f32 {
 }
 
 /// Calculate optimal polling interval based on system conditions and history
-fn compute_new(params: &IntervalParams) -> u64 {
+fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
     // Start with base interval
     let mut adjusted_interval = params.base_interval;
 
@@ -118,7 +118,19 @@ fn compute_new(params: &IntervalParams) -> u64 {
     }
 
     // Ensure interval stays within configured bounds
-    adjusted_interval.clamp(params.min_interval, params.max_interval)
+    let new_interval = adjusted_interval.clamp(params.min_interval, params.max_interval);
+
+    // Blend the new interval with the cached value if available
+    let blended_interval = if let Some(cached) = system_history.last_computed_interval {
+        // Use a weighted average: 70% previous value, 30% new value
+        // This smooths out drastic changes in polling frequency
+        (cached as f32).mul_add(0.7, new_interval as f32 * 0.3).round() as u64
+    } else {
+        new_interval
+    };
+
+    // Blended result still needs to respect the configured bounds
+    blended_interval.clamp(params.min_interval, params.max_interval)
 }
 
 /// Tracks historical system data for "advanced" adaptive polling
@@ -142,6 +154,12 @@ struct SystemHistory {
     last_state_change: Instant,
     /// Current system state
     current_state: SystemState,
+    /// Last computed optimal polling interval
+    last_computed_interval: Option<u64>,
+    /// Last measured CPU volatility value
+    last_cpu_volatility: f32,
+    /// Last measured idle time in seconds
+    last_idle_secs: u64,
 }
 
 impl Default for SystemHistory {
@@ -156,6 +174,9 @@ impl Default for SystemHistory {
             state_durations: std::collections::HashMap::new(),
             last_state_change: Instant::now(),
             current_state: SystemState::default(),
+            last_computed_interval: None,
+            last_cpu_volatility: 0.0,
+            last_idle_secs: 0,
         }
     }
 }
@@ -338,7 +359,7 @@ impl SystemHistory {
             on_battery,
         };
 
-        compute_new(&params)
+        compute_new(&params, self)
     }
 }
 
@@ -491,15 +512,42 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
 
                 // Calculate optimal polling interval if adaptive polling is enabled
                 if config.daemon.adaptive_interval {
-                    let optimal_interval =
-                        system_history.calculate_optimal_interval(&config, on_battery);
+                    let current_cpu_volatility = system_history.get_cpu_volatility();
+                    let current_idle_secs = system_history.last_user_activity.elapsed().as_secs();
 
-                    // Don't change the interval too dramatically at once
-                    if optimal_interval > current_poll_interval {
-                        current_poll_interval = (current_poll_interval + optimal_interval) / 2;
-                    } else if optimal_interval < current_poll_interval {
-                        current_poll_interval = current_poll_interval
-                            - ((current_poll_interval - optimal_interval) / 2).max(1);
+                    // Only recalculate if there's a significant change in system metrics
+                    // or if we haven't computed an interval yet
+                    if system_history.last_computed_interval.is_none()
+                        || (system_history.last_cpu_volatility - current_cpu_volatility).abs() > 1.0
+                        || (system_history.last_idle_secs as i64 - current_idle_secs as i64).abs()
+                            > 10
+                    {
+                        let optimal_interval =
+                            system_history.calculate_optimal_interval(&config, on_battery);
+
+                        // Store the new interval and update cached metrics
+                        system_history.last_computed_interval = Some(optimal_interval);
+                        system_history.last_cpu_volatility = current_cpu_volatility;
+                        system_history.last_idle_secs = current_idle_secs;
+
+                        debug!(
+                            "Recalculated optimal interval: {optimal_interval}s (significant system change detected)"
+                        );
+
+                        // Don't change the interval too dramatically at once
+                        if optimal_interval > current_poll_interval {
+                            current_poll_interval = (current_poll_interval + optimal_interval) / 2;
+                        } else if optimal_interval < current_poll_interval {
+                            current_poll_interval = current_poll_interval
+                                - ((current_poll_interval - optimal_interval) / 2).max(1);
+                        }
+                    } else {
+                        debug!(
+                            "Using cached optimal interval: {}s (no significant system change)",
+                            system_history
+                                .last_computed_interval
+                                .unwrap_or(current_poll_interval)
+                        );
                     }
 
                     // Make sure that we respect the (user) configured min and max limits
