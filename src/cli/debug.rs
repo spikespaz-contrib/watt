@@ -12,8 +12,7 @@ pub fn run_debug(config: &AppConfig) -> Result<(), AppError> {
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Current date and time
-    let formatted_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    println!("Timestamp: {formatted_time}");
+    println!("Timestamp: {}", jiff::Timestamp::now());
 
     // Kernel information
     if let Ok(kernel_info) = get_kernel_info() {
