@@ -94,8 +94,24 @@ impl TurboHysteresis {
 
     /// Update the turbo state for hysteresis
     fn update_state(&self, new_state: bool) {
+q        // First store the new state, then mark as initialized
+        // With this, any thread seeing initialized=true will also see the correct state
         self.previous_state.store(new_state, Ordering::Release);
-        self.initialized.store(true, Ordering::Release);
+
+        // Already initialized, no need for compare_exchange
+        if self.initialized.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Otherwise, try to set initialized=true (but only if it was false)
+        self.initialized
+            .compare_exchange(
+                false,             // expected: not initialized
+                true,              // desired: mark as initialized
+                Ordering::Release, // success ordering: release for memory visibility
+                Ordering::Relaxed, // failure ordering: we don't care about the current value on failure
+            )
+            .ok(); // Ignore the result - if it fails, it means another thread already initialized it
     }
 }
 
