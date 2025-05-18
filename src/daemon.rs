@@ -124,7 +124,10 @@ fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> u64 {
     let blended_interval = if let Some(cached) = system_history.last_computed_interval {
         // Use a weighted average: 70% previous value, 30% new value
         // This smooths out drastic changes in polling frequency
-        (cached as f32).mul_add(0.7, new_interval as f32 * 0.3).round() as u64
+        // We use integer arithmetic to avoid precision loss with large interval values
+        // I think Clippy warned me about this at some point and I ignored it. Now I come
+        // crawling back to it...
+        (cached * 7 + new_interval * 3) / 10
     } else {
         new_interval
     };
