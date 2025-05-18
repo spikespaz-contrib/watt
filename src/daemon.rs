@@ -1,9 +1,8 @@
-use crate::config::watcher::ConfigWatcher;
 use crate::config::{AppConfig, LogLevel};
 use crate::core::SystemReport;
 use crate::engine;
 use crate::monitor;
-use crate::util::error::AppError;
+use crate::util::error::{AppError, ControlError};
 use log::{LevelFilter, debug, error, info, warn};
 use std::collections::VecDeque;
 use std::fs::File;
@@ -60,7 +59,15 @@ fn idle_multiplier(idle_secs: u64) -> f32 {
 }
 
 /// Calculate optimal polling interval based on system conditions and history
-fn compute_new(params: &IntervalParams) -> u64 {
+///
+/// Returns Ok with the calculated interval, or Err if the configuration is invalid
+fn compute_new(
+    params: &IntervalParams,
+    system_history: &SystemHistory,
+) -> Result<u64, ControlError> {
+    // Use the centralized validation function
+    validate_poll_intervals(params.min_interval, params.max_interval)?;
+
     // Start with base interval
     let mut adjusted_interval = params.base_interval;
 
@@ -117,8 +124,31 @@ fn compute_new(params: &IntervalParams) -> u64 {
         adjusted_interval = (adjusted_interval / 2).max(1);
     }
 
-    // Ensure interval stays within configured bounds
-    adjusted_interval.clamp(params.min_interval, params.max_interval)
+    // Enforce a minimum of 1 second to prevent busy loops, regardless of params.min_interval
+    let min_safe_interval = params.min_interval.max(1);
+    let new_interval = adjusted_interval.clamp(min_safe_interval, params.max_interval);
+
+    // Blend the new interval with the cached value if available
+    let blended_interval = if let Some(cached) = system_history.last_computed_interval {
+        // Use a weighted average: 70% previous value, 30% new value
+        // This smooths out drastic changes in polling frequency
+        const PREVIOUS_VALUE_WEIGHT: u128 = 7; // 70%
+        const NEW_VALUE_WEIGHT: u128 = 3; // 30%
+        const TOTAL_WEIGHT: u128 = PREVIOUS_VALUE_WEIGHT + NEW_VALUE_WEIGHT; // 10
+
+        // XXX: Use u128 arithmetic to avoid overflow with large interval values
+        let result = (u128::from(cached) * PREVIOUS_VALUE_WEIGHT
+            + u128::from(new_interval) * NEW_VALUE_WEIGHT)
+            / TOTAL_WEIGHT;
+
+        result as u64
+    } else {
+        new_interval
+    };
+
+    // Blended result still needs to respect the configured bounds
+    // Again enforce minimum of 1 second regardless of params.min_interval
+    Ok(blended_interval.clamp(min_safe_interval, params.max_interval))
 }
 
 /// Tracks historical system data for "advanced" adaptive polling
@@ -142,6 +172,8 @@ struct SystemHistory {
     last_state_change: Instant,
     /// Current system state
     current_state: SystemState,
+    /// Last computed optimal polling interval
+    last_computed_interval: Option<u64>,
 }
 
 impl Default for SystemHistory {
@@ -156,6 +188,7 @@ impl Default for SystemHistory {
             state_durations: std::collections::HashMap::new(),
             last_state_change: Instant::now(),
             current_state: SystemState::default(),
+            last_computed_interval: None,
         }
     }
 }
@@ -325,7 +358,11 @@ impl SystemHistory {
     }
 
     /// Calculate optimal polling interval based on system conditions
-    fn calculate_optimal_interval(&self, config: &AppConfig, on_battery: bool) -> u64 {
+    fn calculate_optimal_interval(
+        &self,
+        config: &AppConfig,
+        on_battery: bool,
+    ) -> Result<u64, ControlError> {
         let params = IntervalParams {
             base_interval: config.daemon.poll_interval_sec,
             min_interval: config.daemon.min_poll_interval_sec,
@@ -338,12 +375,34 @@ impl SystemHistory {
             on_battery,
         };
 
-        compute_new(&params)
+        compute_new(&params, self)
+    }
+}
+
+/// Validates that poll interval configuration is consistent
+/// Returns Ok if configuration is valid, Err with a descriptive message if invalid
+fn validate_poll_intervals(min_interval: u64, max_interval: u64) -> Result<(), ControlError> {
+    if min_interval < 1 {
+        return Err(ControlError::InvalidValueError(
+            "min_interval must be ≥ 1".to_string(),
+        ));
+    }
+    if max_interval < 1 {
+        return Err(ControlError::InvalidValueError(
+            "max_interval must be ≥ 1".to_string(),
+        ));
+    }
+    if max_interval >= min_interval {
+        Ok(())
+    } else {
+        Err(ControlError::InvalidValueError(format!(
+            "Invalid interval configuration: max_interval ({max_interval}) is less than min_interval ({min_interval})"
+        )))
     }
 }
 
 /// Run the daemon
-pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> {
+pub fn run_daemon(config: AppConfig, verbose: bool) -> Result<(), AppError> {
     // Set effective log level based on config and verbose flag
     let effective_log_level = if verbose {
         LogLevel::Debug
@@ -363,6 +422,14 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
     log::set_max_level(level_filter);
 
     info!("Starting superfreq daemon...");
+
+    // Validate critical configuration values before proceeding
+    if let Err(err) = validate_poll_intervals(
+        config.daemon.min_poll_interval_sec,
+        config.daemon.max_poll_interval_sec,
+    ) {
+        return Err(AppError::Control(err));
+    }
 
     // Create a flag that will be set to true when a signal is received
     let running = Arc::new(AtomicBool::new(true));
@@ -385,35 +452,6 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
         info!("Stats will be written to: {stats_path}");
     }
 
-    // Initialize config file watcher if a path is available
-    let config_file_path = if let Ok(path) = std::env::var("SUPERFREQ_CONFIG") {
-        Some(path)
-    } else {
-        // Check standard config paths
-        let default_paths = ["/etc/xdg/superfreq/config.toml", "/etc/superfreq.toml"];
-
-        default_paths
-            .iter()
-            .find(|&path| std::path::Path::new(path).exists())
-            .map(|path| (*path).to_string())
-    };
-
-    let mut config_watcher = if let Some(path) = config_file_path {
-        match ConfigWatcher::new(&path) {
-            Ok(watcher) => {
-                info!("Watching config file: {path}");
-                Some(watcher)
-            }
-            Err(e) => {
-                warn!("Failed to initialize config file watcher: {e}");
-                None
-            }
-        }
-    } else {
-        warn!("No config file found to watch for changes.");
-        None
-    };
-
     // Variables for adaptive polling
     // Make sure that the poll interval is *never* zero to prevent a busy loop
     let mut current_poll_interval = config.daemon.poll_interval_sec.max(1);
@@ -425,31 +463,6 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
     // Main loop
     while running.load(Ordering::SeqCst) {
         let start_time = Instant::now();
-
-        // Check for configuration changes
-        if let Some(watcher) = &mut config_watcher {
-            if let Some(config_result) = watcher.check_for_changes() {
-                match config_result {
-                    Ok(new_config) => {
-                        info!("Config file changed, updating configuration");
-                        config = new_config;
-                        // Reset polling interval after config change
-                        current_poll_interval = config.daemon.poll_interval_sec.max(1);
-                        if config.daemon.poll_interval_sec == 0 {
-                            warn!(
-                                "Poll interval is set to zero in updated config, using 1s minimum to prevent a busy loop"
-                            );
-                        }
-                        // Mark this as a system event for adaptive polling
-                        system_history.last_user_activity = Instant::now();
-                    }
-                    Err(e) => {
-                        error!("Error loading new configuration: {e}");
-                        // Continue with existing config
-                    }
-                }
-            }
-        }
 
         match monitor::collect_system_report(&config) {
             Ok(report) => {
@@ -491,15 +504,34 @@ pub fn run_daemon(mut config: AppConfig, verbose: bool) -> Result<(), AppError> 
 
                 // Calculate optimal polling interval if adaptive polling is enabled
                 if config.daemon.adaptive_interval {
-                    let optimal_interval =
-                        system_history.calculate_optimal_interval(&config, on_battery);
+                    match system_history.calculate_optimal_interval(&config, on_battery) {
+                        Ok(optimal_interval) => {
+                            // Store the new interval
+                            system_history.last_computed_interval = Some(optimal_interval);
 
-                    // Don't change the interval too dramatically at once
-                    if optimal_interval > current_poll_interval {
-                        current_poll_interval = (current_poll_interval + optimal_interval) / 2;
-                    } else if optimal_interval < current_poll_interval {
-                        current_poll_interval = current_poll_interval
-                            - ((current_poll_interval - optimal_interval) / 2).max(1);
+                            debug!("Recalculated optimal interval: {optimal_interval}s");
+
+                            // Don't change the interval too dramatically at once
+                            match optimal_interval.cmp(&current_poll_interval) {
+                                std::cmp::Ordering::Greater => {
+                                    current_poll_interval =
+                                        (current_poll_interval + optimal_interval) / 2;
+                                }
+                                std::cmp::Ordering::Less => {
+                                    current_poll_interval = current_poll_interval
+                                        - ((current_poll_interval - optimal_interval) / 2).max(1);
+                                }
+                                std::cmp::Ordering::Equal => {
+                                    // No change needed when they're equal
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // Log the error and stop the daemon when an invalid configuration is detected
+                            error!("Critical configuration error: {e}");
+                            running.store(false, Ordering::SeqCst);
+                            break;
+                        }
                     }
 
                     // Make sure that we respect the (user) configured min and max limits
@@ -560,7 +592,6 @@ fn write_stats_file(path: &str, report: &SystemReport) -> Result<(), std::io::Er
     // CPU info
     writeln!(file, "governor={:?}", report.cpu_global.current_governor)?;
     writeln!(file, "turbo={:?}", report.cpu_global.turbo_status)?;
-
     if let Some(temp) = report.cpu_global.average_temperature_celsius {
         writeln!(file, "cpu_temp={temp:.1}")?;
     }

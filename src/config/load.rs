@@ -26,7 +26,7 @@ pub fn load_config_from_path(specific_path: Option<&str>) -> Result<AppConfig, C
         if path.exists() {
             return load_and_parse_config(path);
         }
-        return Err(ConfigError::IoError(std::io::Error::new(
+        return Err(ConfigError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("Specified config file not found: {}", path.display()),
         )));
@@ -80,10 +80,9 @@ pub fn load_config_from_path(specific_path: Option<&str>) -> Result<AppConfig, C
 
 /// Load and parse a configuration file
 fn load_and_parse_config(path: &Path) -> Result<AppConfig, ConfigError> {
-    let contents = fs::read_to_string(path).map_err(ConfigError::IoError)?;
+    let contents = fs::read_to_string(path).map_err(ConfigError::Io)?;
 
-    let toml_app_config =
-        toml::from_str::<AppConfigToml>(&contents).map_err(ConfigError::TomlError)?;
+    let toml_app_config = toml::from_str::<AppConfigToml>(&contents).map_err(ConfigError::Toml)?;
 
     // Handle inheritance of values from global to profile configs
     let mut charger_profile = toml_app_config.charger.clone();

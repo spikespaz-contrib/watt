@@ -23,17 +23,17 @@ pub struct BatteryChargeThresholds {
 impl BatteryChargeThresholds {
     pub fn new(start: u8, stop: u8) -> Result<Self, ConfigError> {
         if stop == 0 {
-            return Err(ConfigError::ValidationError(
+            return Err(ConfigError::Validation(
                 "Stop threshold must be greater than 0%".to_string(),
             ));
         }
         if start >= stop {
-            return Err(ConfigError::ValidationError(format!(
+            return Err(ConfigError::Validation(format!(
                 "Start threshold ({start}) must be less than stop threshold ({stop})"
             )));
         }
         if stop > 100 {
-            return Err(ConfigError::ValidationError(format!(
+            return Err(ConfigError::Validation(format!(
                 "Stop threshold ({stop}) cannot exceed 100%"
             )));
         }
@@ -98,36 +98,17 @@ pub struct AppConfig {
 }
 
 // Error type for config loading
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    IoError(std::io::Error),
-    TomlError(toml::de::Error),
-    ValidationError(String),
-}
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 
-impl From<std::io::Error> for ConfigError {
-    fn from(err: std::io::Error) -> Self {
-        Self::IoError(err)
-    }
-}
+    #[error("TOML parsing error: {0}")]
+    Toml(#[from] toml::de::Error),
 
-impl From<toml::de::Error> for ConfigError {
-    fn from(err: toml::de::Error) -> Self {
-        Self::TomlError(err)
-    }
+    #[error("Configuration validation error: {0}")]
+    Validation(String),
 }
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::IoError(e) => write!(f, "I/O error: {e}"),
-            Self::TomlError(e) => write!(f, "TOML parsing error: {e}"),
-            Self::ValidationError(s) => write!(f, "Configuration validation error: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 // Intermediate structs for TOML parsing
 #[derive(Deserialize, Serialize, Debug, Clone)]

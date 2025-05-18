@@ -109,7 +109,7 @@ pub fn set_governor(governor: &str, core_id: Option<u32>) -> Result<()> {
     let (is_valid, available_governors) = is_governor_valid(governor)?;
 
     if !is_valid {
-        return Err(ControlError::InvalidValueError(format!(
+        return Err(ControlError::InvalidGovernor(format!(
             "Governor '{}' is not available on this system. Valid governors: {}",
             governor,
             available_governors.join(", ")
@@ -432,7 +432,7 @@ fn read_sysfs_value_as_u32(path: &str) -> Result<u32> {
     content
         .trim()
         .parse::<u32>()
-        .map_err(|e| ControlError::ReadError(format!("Failed to parse value from {path}: {e}")))
+        .map_err(|e| ControlError::ParseError(format!("Failed to parse value from {path}: {e}")))
 }
 
 fn validate_min_frequency(core_id: u32, new_min_freq_mhz: u32) -> Result<()> {
