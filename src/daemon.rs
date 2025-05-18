@@ -62,13 +62,13 @@ fn idle_multiplier(idle_secs: u64) -> f32 {
 ///
 /// Returns Ok with the calculated interval, or Err if the configuration is invalid
 fn compute_new(params: &IntervalParams, system_history: &SystemHistory) -> Result<u64, String> {
-    // Catch invalid configurations during development
-    debug_assert!(
-        params.max_interval >= params.min_interval,
-        "Configuration error: max_interval ({}) < min_interval ({})",
-        params.max_interval,
-        params.min_interval
-    );
+    // Validate interval configuration
+    if params.max_interval < params.min_interval {
+        return Err(format!(
+            "Invalid interval configuration: max_interval ({}) is less than min_interval ({})",
+            params.max_interval, params.min_interval
+        ));
+    }
 
     // Start with base interval
     let mut adjusted_interval = params.base_interval;
