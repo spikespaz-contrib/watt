@@ -7,7 +7,7 @@ use log::{debug, info, warn};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A struct to track turbo boost state for AC and battery power modes
+/// Track turbo boost state for AC and battery power modes
 struct TurboHysteresisStates {
     /// State for when on AC power
     charger: TurboHysteresis,
@@ -32,8 +32,6 @@ impl TurboHysteresisStates {
     }
 }
 
-/// Create a global instance of `TurboHysteresisStates` without a mutex
-/// since `AtomicBool` already provides thread safety
 static TURBO_STATES: OnceLock<TurboHysteresisStates> = OnceLock::new();
 
 /// Get or initialize the global turbo states
@@ -69,24 +67,26 @@ impl TurboHysteresis {
     }
 
     /// Initialize the state with a specific value if not already initialized
-    /// Uses atomic `compare_exchange` to ensure only one thread can initialize the state
+    /// Only one thread should be able to initialize the state
     fn initialize_with(&self, initial_state: bool) -> bool {
+        // First store the initial state so that it's visible before initialized=true
+        self.previous_state.store(initial_state, Ordering::Release);
+
         // Try to atomically change initialized from false to true
-        // This ensures only one thread can win the initialization race
+        // Now, only one thread can win the initialization race
         match self.initialized.compare_exchange(
             false,             // expected: not initialized
             true,              // desired: mark as initialized
-            Ordering::AcqRel,  // success ordering: acquire+release for memory visibility
-            Ordering::Acquire, // failure ordering: just need to acquire the current value
+            Ordering::Release, // success: release for memory visibility
+            Ordering::Acquire, // failure: just need to acquire the current value
         ) {
             Ok(_) => {
-                // We won the race to initialize - set the initial state
-                // Store the initial_state first, before marking as initialized
-                self.previous_state.store(initial_state, Ordering::Release);
+                // We won the race to initialize
                 initial_state
             }
             Err(_) => {
-                // Another thread already initialized it - read the current state
+                // Another thread already initialized it.
+                // Read the current state in bitter defeat
                 self.previous_state.load(Ordering::Acquire)
             }
         }
@@ -108,10 +108,10 @@ impl TurboHysteresis {
             .compare_exchange(
                 false,             // expected: not initialized
                 true,              // desired: mark as initialized
-                Ordering::Release, // success ordering: release for memory visibility
-                Ordering::Relaxed, // failure ordering: we don't care about the current value on failure
+                Ordering::Release, // success: release for memory visibility
+                Ordering::Relaxed, // failure: we don't care about the current value on failure
             )
-            .ok(); // Ignore the result - if it fails, it means another thread already initialized it
+            .ok(); // Ignore the result. If it fails, it means another thread already initialized it
     }
 }
 
@@ -147,7 +147,7 @@ where
 }
 
 /// Determines the appropriate CPU profile based on power status or forced mode,
-/// and applies the settings using functions from the `cpu` module.
+/// and applies the settings (via helpers defined in the `cpu` module)
 pub fn determine_and_apply_settings(
     report: &SystemReport,
     config: &AppConfig,
@@ -352,6 +352,7 @@ fn manage_auto_turbo(
             );
             false
         }
+
         // If load is high enough, enable turbo (unless temp already caused it to disable)
         (_, Some(usage), _) if usage >= turbo_settings.load_threshold_high => {
             info!(
@@ -360,6 +361,7 @@ fn manage_auto_turbo(
             );
             true
         }
+
         // If load is low, disable turbo
         (_, Some(usage), _) if usage <= turbo_settings.load_threshold_low => {
             info!(
@@ -368,6 +370,7 @@ fn manage_auto_turbo(
             );
             false
         }
+
         // In intermediate load range, maintain previous state (hysteresis)
         (_, Some(usage), prev_state)
             if usage > turbo_settings.load_threshold_low
@@ -380,6 +383,7 @@ fn manage_auto_turbo(
             );
             prev_state
         }
+
         // When CPU load data is present but temperature is missing, use the same hysteresis logic
         (None, Some(usage), prev_state) => {
             info!(
@@ -389,6 +393,7 @@ fn manage_auto_turbo(
             );
             prev_state
         }
+
         // When all metrics are missing, maintain the previous state
         (None, None, prev_state) => {
             info!(
@@ -397,6 +402,7 @@ fn manage_auto_turbo(
             );
             prev_state
         }
+
         // Any other cases with partial metrics, maintain previous state for stability
         (_, _, prev_state) => {
             info!(
@@ -454,6 +460,9 @@ fn validate_turbo_auto_settings(settings: &TurboAutoSettings) -> Result<(), Engi
     }
 
     // Validate temperature threshold (realistic range for CPU temps in Celsius)
+    // TODO: different CPUs have different temperature thresholds. While 110 is a good example
+    // "extreme" case, the upper barrier might be *lower* for some devices. We'll want to fix
+    // this eventually, or make it configurable.
     if settings.temp_threshold_high <= 0.0 || settings.temp_threshold_high > 110.0 {
         return Err(EngineError::ConfigurationError(
             "Invalid turbo auto settings: temperature threshold must be between 0°C and 110°C"
