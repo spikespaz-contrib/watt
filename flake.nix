@@ -27,9 +27,11 @@
       })
       pkgsForEach;
 
-    devShells = forAllSystems (system: {
-      default = pkgsForEach.${system}.callPackage ./nix/shell.nix {};
-    });
+    devShells =
+      nixpkgs.lib.mapAttrs (system: pkgs: {
+        default = pkgs.callPackage ./nix/shell.nix {};
+      })
+      pkgsForEach;
 
     nixosModules = {
       superfreq = import ./nix/module.nix inputs;
