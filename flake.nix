@@ -12,6 +12,13 @@
         localSystem.system = system;
       });
   in {
+    overlays = {
+      superfreq = final: _: {
+        superfreq = final.callPackage ./nix/package.nix {};
+      };
+      default = self.overlays.superfreq;
+    };
+
     packages = forAllSystems (system: {
       superfreq = pkgsForEach.${system}.callPackage ./nix/package.nix {};
       default = self.packages.${system}.superfreq;
