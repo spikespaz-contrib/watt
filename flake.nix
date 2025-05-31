@@ -10,6 +10,7 @@
     pkgsForEach = forAllSystems (system:
       import nixpkgs {
         localSystem.system = system;
+        overlays = [self.overlays.default];
       });
   in {
     overlays = {
@@ -19,10 +20,12 @@
       default = self.overlays.superfreq;
     };
 
-    packages = forAllSystems (system: {
-      superfreq = pkgsForEach.${system}.callPackage ./nix/package.nix {};
-      default = self.packages.${system}.superfreq;
-    });
+    packages =
+      nixpkgs.lib.mapAttrs (system: pkgs: {
+        inherit (pkgs) superfreq;
+        default = self.packages.${system}.superfreq;
+      })
+      pkgsForEach;
 
     devShells = forAllSystems (system: {
       default = pkgsForEach.${system}.callPackage ./nix/shell.nix {};
