@@ -7,8 +7,8 @@
     ...
   } @ inputs: let
     inherit (nixpkgs) lib;
-    forAllSystems = lib.genAttrs ["x86_64-linux" "aarch64-linux"];
-    pkgsForEach = forAllSystems (system:
+    eachSystem = lib.genAttrs ["x86_64-linux" "aarch64-linux"];
+    pkgsFor = eachSystem (system:
       import nixpkgs {
         localSystem.system = system;
         overlays = [self.overlays.default];
@@ -26,19 +26,19 @@
         inherit (pkgs) superfreq;
         default = self.packages.${system}.superfreq;
       })
-      pkgsForEach;
+      pkgsFor;
 
     devShells =
       lib.mapAttrs (system: pkgs: {
         default = pkgs.callPackage ./nix/shell.nix {};
       })
-      pkgsForEach;
+      pkgsFor;
 
     nixosModules = {
       superfreq = import ./nix/module.nix inputs;
       default = self.nixosModules.superfreq;
     };
 
-    formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.alejandra);
+    formatter = eachSystem (system: nixpkgs.legacyPackages.${system}.alejandra);
   };
 }
