@@ -7,7 +7,10 @@
     ...
   } @ inputs: let
     forAllSystems = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux"];
-    pkgsForEach = nixpkgs.legacyPackages;
+    pkgsForEach = forAllSystems (system:
+      import nixpkgs {
+        localSystem.system = system;
+      });
   in {
     packages = forAllSystems (system: {
       superfreq = pkgsForEach.${system}.callPackage ./nix/package.nix {};
